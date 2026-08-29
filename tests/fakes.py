@@ -31,19 +31,23 @@ class FakeDiscoveryProvider:
 
 
 class FakeClassifier:
-    def __init__(self, classification=None, fail=False):
+    def __init__(self, classification=None, fail=False, results=None):
         self.classification = classification or StoryClassification(
             relevant=True, relevance_score=0.9, importance=4, category="major_news",
             story_key="example-development", reasoning_summary="Relevant",
             factual_summary="A documented development occurred.")
         self.fail = fail
+        self.results = results or {}
         self.calls = 0
 
     def classify(self, candidate):
         self.calls += 1
         if self.fail:
             raise RuntimeError("classifier failed")
-        return self.classification
+        result = self.results.get(str(candidate.url), self.classification)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class FakeWriter:

@@ -100,6 +100,14 @@ class DiscoveryReport(BaseModel):
         return self.searches_successful / self.searches_planned if self.searches_planned else 0.0
 
 
+class ClassificationReport(BaseModel):
+    attempted: int = 0
+    successful: int = 0
+    rejected: int = 0
+    invalid_output: int = 0
+    errors: list[str] = Field(default_factory=list)
+
+
 class UsageSummary(BaseModel):
     provider_calls_today: dict[str, int] = Field(default_factory=dict)
     provider_calls_month: dict[str, int] = Field(default_factory=dict)
@@ -110,5 +118,6 @@ class RunResult(BaseModel):
     run_id: str
     status: str
     discovery: DiscoveryReport
+    classification: ClassificationReport = Field(default_factory=ClassificationReport)
     digest: Digest | None = None
     accepted_stories: int = 0

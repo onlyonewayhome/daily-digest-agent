@@ -14,7 +14,16 @@ from .dedupe import deduplicate_candidates, group_stories_by_key
 from .delivery.base import DeliveryProvider
 from .discovery.base import DiscoveryProvider
 from .exceptions import BudgetExceeded, DiscoveryHealthError, DuplicateDigestError, ProviderOutputError
-from .models import Digest, DigestContext, DiscoveryReport, RunResult, SourceRecord, Story, UsageBearing
+from .models import (
+    ClassificationReport,
+    Digest,
+    DigestContext,
+    DiscoveryReport,
+    RunResult,
+    SourceRecord,
+    Story,
+    UsageBearing,
+)
 from .normalize import canonicalize_url
 from .retry import is_retryable_error
 from .storage.base import StateStore
@@ -105,32 +114,48 @@ class DigestPipeline:
                     logger.exception("Discovery mission failed", extra={"mission": mission.id, "run_id": run_id})
             if report.success_ratio < self.config.health.minimum_search_success_ratio:
                 raise DiscoveryHealthError("Digest not generated because discovery coverage was insufficient")
-
-            novel = [candidate for candidate in deduplicate_candidates(candidates)
-                     if not self.store.story_exists(canonicalize_url(str(candidate.url)))]
+            novel = deduplicate_candidates(candidates)
             accepted: list[Story] = []
+            classification_report = ClassificationReport()
             configured_ids = {category.id for category in self.config.categories}
             for candidate in novel:
-                classification = self._paid_call(
-                    guard, run_id, "google", self.config.models.classification.model,
-                    lambda candidate=candidate: self.classifier.classify(candidate), 3,
-                    unsafe_budget_override,
-                )
-                if classification.category is not None and classification.category not in configured_ids:
-                    raise ProviderOutputError(
-                        f"Classifier returned unknown category {classification.category!r}; "
-                        f"expected {sorted(configured_ids)}"
+                classification_report.attempted += 1
+                try:
+                    classification = self._paid_call(
+                        guard, run_id, "google", self.config.models.classification.model,
+                        lambda candidate=candidate: self.classifier.classify(candidate), 3,
+                        unsafe_budget_override,
                     )
+                    if classification.category is not None and classification.category not in configured_ids:
+                        raise ProviderOutputError(
+                            f"Classifier returned unknown category {classification.category!r}; "
+                            f"expected {sorted(configured_ids)}"
+                        )
+                except ProviderOutputError as exc:
+                    classification_report.rejected += 1
+                    classification_report.invalid_output += 1
+                    classification_report.errors.append(str(exc))
+                    logger.warning(
+                        "Rejected candidate due to invalid classifier output",
+                        extra={"candidate_url": str(candidate.url), "run_id": run_id},
+                    )
+                    continue
+
+                classification_report.successful += 1
                 if (not classification.relevant
                         or classification.relevance_score < self.config.filters.minimum_relevance
                         or classification.importance < self.config.filters.minimum_importance):
+                    classification_report.rejected += 1
                     continue
                 sources = candidate.grounding_sources or [
                     SourceRecord(title=candidate.title, url=candidate.url, publisher=candidate.publisher,
                                  published_at=candidate.published_at)
                 ]
+                primary_source_url = (
+                    candidate.grounding_sources[0].url if candidate.grounding_sources else candidate.url
+                )
                 accepted.append(Story(
-                    canonical_url=canonicalize_url(str(sources[0].url)), title=candidate.title,
+                    canonical_url=canonicalize_url(str(primary_source_url)), title=candidate.title,
                     publisher=candidate.publisher, published_at=candidate.published_at,
                     first_seen_at=now, last_seen_at=now, category=classification.category,
                     relevance_score=classification.relevance_score, importance=classification.importance,
@@ -164,7 +189,7 @@ class DigestPipeline:
                 digest.sent_at = sent_at
             self.store.record_run_finish(run_id, "success")
             return RunResult(run_id=run_id, status="success", discovery=report,
-                             digest=digest, accepted_stories=len(grouped))
+                             classification=classification_report, digest=digest, accepted_stories=len(grouped))
         except Exception as exc:
             status = "degraded" if isinstance(exc, DiscoveryHealthError) else "failed"
             self.store.record_run_finish(run_id, status, str(exc))

@@ -4,7 +4,7 @@ import pytest
 
 from daily_digest_agent.config import AppConfig
 from daily_digest_agent.exceptions import DiscoveryHealthError, ProviderBudgetExceeded, ProviderOutputError
-from daily_digest_agent.models import DiscoveryResult, StoryClassification, TokenUsage
+from daily_digest_agent.models import DiscoveryResult, SourceRecord, StoryClassification, TokenUsage
 from daily_digest_agent.pipeline import DigestPipeline
 from daily_digest_agent.storage.sqlite import SQLiteStateStore
 from tests.fakes import FakeClassifier, FakeDelivery, FakeDiscoveryProvider, FakeWriter, candidate
@@ -96,14 +96,94 @@ def test_unknown_pricing_blocks_provider_execution(tmp_path, valid_config):
     assert discovery.calls == 0
 
 
-def test_unknown_category_is_rejected(tmp_path, valid_config):
-    classification = StoryClassification(
+def test_pipeline_uses_candidate_url_when_grounding_sources_are_empty(tmp_path, valid_config):
+    item = candidate(url="https://example.com/story?utm_source=google")
+    value, store = pipeline(tmp_path, valid_config, results={"general": [item]})
+
+    result = value.run(dry_run=True)
+
+    story = store.get_recent_stories(result.digest.generated_at.replace(year=2000))[0]
+    assert story.canonical_url == "https://example.com/story"
+    assert len(story.sources) == 1
+    assert str(story.sources[0].url) == str(item.url)
+
+
+def test_pipeline_uses_matched_grounding_source_as_authoritative(tmp_path, valid_config):
+    item = candidate(url="https://news.example.com/article?utm_source=x")
+    item.grounding_sources = [SourceRecord(title=item.title, url="https://news.example.com/article")]
+    value, store = pipeline(tmp_path, valid_config, results={"general": [item]})
+
+    result = value.run(dry_run=True)
+
+    story = store.get_recent_stories(result.digest.generated_at.replace(year=2000))[0]
+    assert story.canonical_url == "https://news.example.com/article"
+    assert story.sources == item.grounding_sources
+
+
+def test_unknown_category_rejects_candidate_and_run_continues(tmp_path, valid_config):
+    invalid = StoryClassification(
         relevant=True, relevance_score=0.9, importance=4, category="not-configured",
-        story_key="example-development", reasoning_summary="Relevant", factual_summary="Fact",
+        story_key="invalid-story", reasoning_summary="Relevant", factual_summary="Fact",
+        token_usage=TokenUsage(input_tokens=30, output_tokens=10),
     )
-    value, _ = pipeline(
-        tmp_path, valid_config, results={"general": [candidate()]},
-        classifier=FakeClassifier(classification=classification),
+    valid = StoryClassification(
+        relevant=True, relevance_score=0.9, importance=4, category="major_news",
+        story_key="valid-story", reasoning_summary="Relevant", factual_summary="Fact",
+        token_usage=TokenUsage(input_tokens=25, output_tokens=8),
     )
-    with pytest.raises(ProviderOutputError, match="unknown category"):
+    candidate_a = candidate(url="https://example.com/a", title="Candidate A")
+    candidate_b = candidate(url="https://example.com/b", title="Candidate B")
+    classifier = FakeClassifier(results={str(candidate_a.url): invalid, str(candidate_b.url): valid})
+    value, store = pipeline(
+        tmp_path, valid_config, results={"general": [candidate_a, candidate_b]}, classifier=classifier,
+    )
+
+    result = value.run(dry_run=True)
+
+    assert result.status == "success"
+    assert result.accepted_stories == 1
+    assert result.classification.attempted == 2
+    assert result.classification.successful == 1
+    assert result.classification.rejected == 1
+    assert result.classification.invalid_output == 1
+    assert "Candidate B" in result.digest.plain_text
+    assert "Candidate A" not in result.digest.plain_text
+    with store._connect() as db:
+        classification_usage = db.execute(
+            "SELECT input_tokens,output_tokens FROM usage WHERE model=? ORDER BY id",
+            (value.config.models.classification.model,),
+        ).fetchall()
+    assert [(row["input_tokens"], row["output_tokens"]) for row in classification_usage] == [(30, 10), (25, 8)]
+
+
+def test_classifier_provider_output_error_records_usage_and_continues(tmp_path, valid_config):
+    candidate_a = candidate(url="https://example.com/a", title="Candidate A")
+    candidate_b = candidate(url="https://example.com/b", title="Candidate B")
+    classifier = FakeClassifier(results={str(candidate_a.url): ProviderOutputError("malformed classifier response")})
+    value, store = pipeline(
+        tmp_path, valid_config, results={"general": [candidate_a, candidate_b]}, classifier=classifier,
+    )
+
+    result = value.run(dry_run=True)
+
+    assert result.status == "success"
+    assert result.accepted_stories == 1
+    assert result.classification.invalid_output == 1
+    with store._connect() as db:
+        usage_rows = db.execute(
+            "SELECT input_tokens,output_tokens FROM usage WHERE model=? ORDER BY id",
+            (value.config.models.classification.model,),
+        ).fetchall()
+    assert len(usage_rows) == 2
+    assert (usage_rows[0]["input_tokens"], usage_rows[0]["output_tokens"]) == (0, 0)
+
+
+def test_classifier_provider_failure_is_not_treated_as_candidate_rejection(tmp_path, valid_config):
+    value, store = pipeline(
+        tmp_path, valid_config, results={"general": [candidate()]}, classifier=FakeClassifier(fail=True),
+    )
+
+    with pytest.raises(RuntimeError, match="classifier failed"):
         value.run(dry_run=True)
+
+    assert store.get_last_run()["status"] == "failed"

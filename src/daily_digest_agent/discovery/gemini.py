@@ -46,8 +46,7 @@ def _grounding_sources(response: object) -> list[SourceRecord]:
 
 def _matching_sources(url: HttpUrl, grounded: list[SourceRecord]) -> list[SourceRecord]:
     canonical = canonicalize_url(str(url))
-    exact = [source for source in grounded if canonicalize_url(str(source.url)) == canonical]
-    return exact or grounded
+    return [source for source in grounded if canonicalize_url(str(source.url)) == canonical]
 
 
 class GeminiDiscoveryProvider:
