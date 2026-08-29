@@ -1,2 +1,148 @@
 # daily-digest-agent
-A configurable, provider-agnostic framework for building automated daily news and topic digests with web discovery, AI filtering, summarization, persistent state, and scheduled delivery.
+
+A lightweight, topic-agnostic Python framework that discovers recent web developments, filters and
+deduplicates them, writes a source-grounded newsletter, persists state, and delivers on a schedule.
+It runs once and exits: no server, queue, browser automation, or always-on infrastructure.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[Scheduled or Manual Run] --> B[Gemini + Google Search Discovery]
+    B --> C[URL Normalize + Exact Dedupe]
+    C --> D[Gemini Classification]
+    D --> E[Semantic Story Grouping]
+    E --> F[(SQLite or Cloudflare D1)]
+    F --> G[OpenAI Digest Writer]
+    G --> H[Console or Gmail Delivery]
+    I[Budget and Idempotency Circuit Breakers] --> B
+    I --> D
+    I --> G
+```
+
+Provider APIs stay behind typed interfaces. The pipeline contains no topic, geography, category,
+recipient, or provider credential assumptions.
+
+## Features
+
+- Independent grounded discovery missions with health accounting
+- Deterministic URL canonicalization and semantic story grouping
+- Relevance, category, and 0–5 importance classification
+- SQLite development state and parameterized Cloudflare D1 REST persistence
+- Hard per-run, daily, and estimated monthly application limits
+- Quiet-day output only when discovery coverage is healthy
+- Structured OpenAI writer output with plain text and email-safe HTML
+- Console and Gmail OAuth delivery
+- Local-date idempotency, UTC internal timestamps, bounded retries, and prompt-injection guardrails
+
+## Quickstart
+
+Requires Python 3.12 or newer.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+daily-digest-agent validate-config --config config/example.yaml
+daily-digest-agent init-db --config config/example.yaml
+pytest
+```
+
+Copy `config/example.yaml` to `config/digest.yaml`, then change only configuration to define the
+topic, categories, missions, thresholds, models, storage, and delivery. Model names are deliberately
+configurable because provider availability changes. The configured default writer identifier is
+`gpt-5.6-luna`; confirm that the identifier is enabled for your OpenAI project before a live run.
+
+## Commands
+
+```bash
+daily-digest-agent validate-config --config config/digest.yaml
+daily-digest-agent init-db --config config/digest.yaml
+daily-digest-agent run --config config/digest.yaml
+daily-digest-agent run --config config/digest.yaml --dry-run
+daily-digest-agent run --config config/digest.yaml --force
+daily-digest-agent show-budget --config config/digest.yaml
+daily-digest-agent show-last-run --config config/digest.yaml
+```
+
+`--force` bypasses only the successful-run count. It does not bypass provider or monthly caps.
+`--force-send` separately permits sending another digest for the same configured local date.
+`--unsafe-budget-override` is an explicit emergency escape hatch. `--offline` fails closed unless a
+fixture integration is supplied; automated tests use fake providers and never contact a network.
+
+## Providers
+
+| Subsystem | V1 provider |
+|---|---|
+| Discovery | Gemini with Google Search grounding |
+| Classification | Gemini |
+| Writer | OpenAI Responses API |
+| Storage | SQLite, Cloudflare D1 REST API |
+| Delivery | Console, Gmail API OAuth |
+
+The console provider prints plain text and optionally writes HTML under `./output/`. Gmail sends a
+multipart `text/plain` and `text/html` message and never uses a Gmail password.
+
+## Environment variables
+
+Copy `.env.example` into your secret-management system. Supported variables are
+`DIGEST_CONFIG_PATH`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`,
+`CLOUDFLARE_API_TOKEN`, `D1_DATABASE_ID`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`,
+`GMAIL_REFRESH_TOKEN`, `GMAIL_SENDER`, `DIGEST_RECIPIENT`, `DRY_RUN`, and `LOG_LEVEL`.
+The application does not automatically load `.env`; use your shell, CI secret store, or a local
+environment loader. Never commit credentials.
+
+## Local development and tests
+
+SQLite and console delivery require no Cloudflare or Gmail setup. All tests inject fake discovery,
+classification, writer, and delivery providers and run without paid calls:
+
+```bash
+ruff check src tests
+pytest
+```
+
+## Cost safeguards
+
+The state store, not GitHub Actions, records calls and successful runs. Checks happen before the run
+and every paid request. Retries are bounded and each retry must pass the same request guard. Optional
+model pricing yields an application safety estimate, not a billing guarantee. If pricing is absent,
+call ceilings still apply and the framework does not pretend cost is known exactly.
+
+## Failure and security model
+
+Discovery missions fail independently, but the normal newsletter is withheld when the configured
+success ratio is not met. A healthy zero-result run produces a short quiet-day digest. Accepted
+stories are persisted even when omitted due to the digest story limit. Sent digests are protected by
+local-date idempotency.
+
+Public web content is hostile input. Prompts label source material as data, ignore embedded
+instructions, prohibit secret disclosure/provider changes/external actions, and require supplied
+evidence and URLs only. API tokens should be project-scoped and least-privilege. Logs must never
+contain credentials or authorization headers.
+
+## Production deployment
+
+Set `storage.provider: d1` and configure the Cloudflare account, D1 database, and least-privilege API
+token as GitHub secrets. Set `delivery.provider: gmail` and configure OAuth client and refresh-token
+secrets. Copy `config/example.yaml` to `config/digest.yaml`; the scheduled workflow expects that
+path. The example cron is `15:17 UTC` and should be changed for the deployment.
+
+## Create a private topic deployment
+
+A public fork cannot independently be private. Instead:
+
+```bash
+git clone https://github.com/OWNER/daily-digest-agent.git my-topic-digest
+cd my-topic-digest
+git remote rename origin upstream
+git remote add origin git@github.com:OWNER/my-topic-digest.git
+git push -u origin main
+```
+
+Keep private topic details in that repository's `config/digest.yaml` and credentials in GitHub
+Actions Secrets. Do not place private deployment data in the generic upstream.
+
+## License
+
+Apache License 2.0. See `LICENSE`.

@@ -1,0 +1,39 @@
+digest:
+  name: Example Daily
+  description: A daily briefing covering developments relevant to the configured topic.
+  timezone: America/Los_Angeles
+  editorial_voice: Concise, informative, approachable, factual, and useful. Prioritize important developments over filler.
+  search_window_hours: 36
+topic:
+  name: Example Topic
+  description: Substantive developments directly concerning the configured example topic.
+  include_terms: [example term, another term]
+  exclude_terms: [irrelevant example]
+categories:
+  - {id: major_news, name: Major News, weight: 10}
+  - {id: business, name: Business, weight: 7}
+  - {id: events, name: Events, weight: 4}
+search_missions:
+  - id: general
+    prompt: Find substantive news or developments about {topic_name} published or materially updated within the search window.
+  - id: business
+    prompt: Find meaningful commercial developments concerning {topic_name}.
+sources:
+  preferred_domains: []
+  ignored_domains: []
+models:
+  discovery: {provider: google, model: gemini-2.5-flash, grounding: google_search}
+  classification: {provider: google, model: gemini-2.5-flash-lite}
+  writer: {provider: openai, model: gpt-5.6-luna}
+storage: {provider: sqlite, sqlite_path: ./data/digest.db}
+delivery: {provider: console, save_html_path: ./output}
+filters: {minimum_importance: 3, minimum_relevance: 0.60, maximum_stories_per_digest: 15}
+budget:
+  monthly_usd_cap: 3.00
+  max_runs_per_day: 1
+  gemini: {max_calls_per_run: 20, max_calls_per_day: 25}
+  openai: {max_calls_per_run: 2, max_calls_per_day: 3, max_output_tokens_per_digest: 5000}
+pricing:
+  google: {}
+  openai: {}
+health: {minimum_search_success_ratio: 0.75}
