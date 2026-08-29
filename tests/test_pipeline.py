@@ -72,6 +72,58 @@ def test_duplicate_suppression(tmp_path, valid_config):
     assert value.run(dry_run=True).accepted_stories == 1
 
 
+def test_persisted_story_is_skipped_before_classification_on_second_run(tmp_path, valid_config):
+    item = candidate()
+    classifier = FakeClassifier()
+    writer = FakeWriter()
+    value, _ = pipeline(
+        tmp_path, valid_config, results={"general": [item]}, classifier=classifier, writer=writer,
+    )
+
+    first = value.run(dry_run=True)
+    second = value.run(dry_run=True, force=True)
+
+    assert first.accepted_stories == 1
+    assert second.accepted_stories == 0
+    assert "Quiet day" in second.digest.plain_text
+    assert classifier.calls == 1
+    assert writer.calls == 1
+
+
+def test_grounded_canonical_story_is_skipped_before_classification_on_second_run(tmp_path, valid_config):
+    item = candidate(url="https://example.com/story?utm_source=google")
+    item.grounding_sources = [SourceRecord(title=item.title, url="https://example.com/story")]
+    classifier = FakeClassifier()
+    value, store = pipeline(
+        tmp_path, valid_config, results={"general": [item]}, classifier=classifier,
+    )
+
+    first = value.run(dry_run=True)
+    second = value.run(dry_run=True, force=True)
+
+    story = store.get_recent_stories(first.digest.generated_at.replace(year=2000))[0]
+    assert story.canonical_url == "https://example.com/story"
+    assert second.accepted_stories == 0
+    assert classifier.calls == 1
+
+
+def test_candidate_canonical_story_is_skipped_before_classification_on_second_run(tmp_path, valid_config):
+    item = candidate(url="https://example.com/story?utm_source=google")
+    assert item.grounding_sources == []
+    classifier = FakeClassifier()
+    value, store = pipeline(
+        tmp_path, valid_config, results={"general": [item]}, classifier=classifier,
+    )
+
+    first = value.run(dry_run=True)
+    second = value.run(dry_run=True, force=True)
+
+    story = store.get_recent_stories(first.digest.generated_at.replace(year=2000))[0]
+    assert story.canonical_url == "https://example.com/story"
+    assert second.accepted_stories == 0
+    assert classifier.calls == 1
+
+
 def test_empty_discovery_records_request_usage_and_cost(tmp_path, valid_config):
     discovery = FakeDiscoveryProvider(
         {"general": DiscoveryResult(stories=[], token_usage=TokenUsage(input_tokens=100, output_tokens=20))}

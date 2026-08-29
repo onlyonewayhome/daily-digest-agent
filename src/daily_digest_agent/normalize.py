@@ -1,5 +1,7 @@
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from .models import CandidateStory
+
 TRACKING_PARAMETERS = {
     "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "fbclid", "gclid"
 }
@@ -23,3 +25,8 @@ def canonicalize_url(url: str) -> str:
              if k.lower() not in TRACKING_PARAMETERS]
     query.sort()
     return urlunsplit((scheme, hostname + port, path, urlencode(query, doseq=True), ""))
+
+
+def canonical_story_url(candidate: CandidateStory) -> str:
+    primary_url = candidate.grounding_sources[0].url if candidate.grounding_sources else candidate.url
+    return canonicalize_url(str(primary_url))

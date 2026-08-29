@@ -24,7 +24,7 @@ from .models import (
     Story,
     UsageBearing,
 )
-from .normalize import canonicalize_url
+from .normalize import canonical_story_url
 from .retry import is_retryable_error
 from .storage.base import StateStore
 from .writers.base import DigestWriter
@@ -114,7 +114,10 @@ class DigestPipeline:
                     logger.exception("Discovery mission failed", extra={"mission": mission.id, "run_id": run_id})
             if report.success_ratio < self.config.health.minimum_search_success_ratio:
                 raise DiscoveryHealthError("Digest not generated because discovery coverage was insufficient")
-            novel = deduplicate_candidates(candidates)
+            novel = [
+                candidate for candidate in deduplicate_candidates(candidates)
+                if not self.store.story_exists(canonical_story_url(candidate))
+            ]
             accepted: list[Story] = []
             classification_report = ClassificationReport()
             configured_ids = {category.id for category in self.config.categories}
@@ -151,11 +154,8 @@ class DigestPipeline:
                     SourceRecord(title=candidate.title, url=candidate.url, publisher=candidate.publisher,
                                  published_at=candidate.published_at)
                 ]
-                primary_source_url = (
-                    candidate.grounding_sources[0].url if candidate.grounding_sources else candidate.url
-                )
                 accepted.append(Story(
-                    canonical_url=canonicalize_url(str(primary_source_url)), title=candidate.title,
+                    canonical_url=canonical_story_url(candidate), title=candidate.title,
                     publisher=candidate.publisher, published_at=candidate.published_at,
                     first_seen_at=now, last_seen_at=now, category=classification.category,
                     relevance_score=classification.relevance_score, importance=classification.importance,
