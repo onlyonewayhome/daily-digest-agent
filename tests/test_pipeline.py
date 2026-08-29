@@ -72,56 +72,93 @@ def test_duplicate_suppression(tmp_path, valid_config):
     assert value.run(dry_run=True).accepted_stories == 1
 
 
-def test_persisted_story_is_skipped_before_classification_on_second_run(tmp_path, valid_config):
-    item = candidate()
+def test_persisted_story_is_not_reclassified_on_second_run(tmp_path, valid_config):
+    item = candidate(url="https://example.com/story?utm_source=google", title="Persistent Story")
+    assert item.grounding_sources == []
     classifier = FakeClassifier()
     writer = FakeWriter()
-    value, _ = pipeline(
+    pipeline_one, store_one = pipeline(
         tmp_path, valid_config, results={"general": [item]}, classifier=classifier, writer=writer,
     )
 
-    first = value.run(dry_run=True)
-    second = value.run(dry_run=True, force=True)
+    first = pipeline_one.run(dry_run=True)
 
     assert first.accepted_stories == 1
+    assert classifier.calls == 1
+    assert writer.calls == 1
+    story = store_one.get_recent_stories(first.digest.generated_at.replace(year=2000))[0]
+    assert story.canonical_url == "https://example.com/story"
+
+    pipeline_two, store_two = pipeline(
+        tmp_path, valid_config, results={"general": [item]}, classifier=classifier, writer=writer,
+    )
+    assert store_one.path == store_two.path == tmp_path / "state.db"
+
+    second = pipeline_two.run(dry_run=True, force=True)
+
     assert second.accepted_stories == 0
+    assert second.digest is not None
     assert "Quiet day" in second.digest.plain_text
     assert classifier.calls == 1
     assert writer.calls == 1
 
 
-def test_grounded_canonical_story_is_skipped_before_classification_on_second_run(tmp_path, valid_config):
-    item = candidate(url="https://example.com/story?utm_source=google")
-    item.grounding_sources = [SourceRecord(title=item.title, url="https://example.com/story")]
+def test_grounded_canonical_story_is_not_reclassified_on_second_run(tmp_path, valid_config):
+    item = candidate(
+        url="https://news.example.com/article?utm_source=google",
+        title="Grounded Persistent Story",
+    )
+    item.grounding_sources = [
+        SourceRecord(title="Grounded Persistent Story", url="https://news.example.com/article")
+    ]
     classifier = FakeClassifier()
-    value, store = pipeline(
+    pipeline_one, store_one = pipeline(
         tmp_path, valid_config, results={"general": [item]}, classifier=classifier,
     )
 
-    first = value.run(dry_run=True)
-    second = value.run(dry_run=True, force=True)
+    first = pipeline_one.run(dry_run=True)
 
-    story = store.get_recent_stories(first.digest.generated_at.replace(year=2000))[0]
-    assert story.canonical_url == "https://example.com/story"
+    assert first.accepted_stories == 1
+    assert classifier.calls == 1
+    story = store_one.get_recent_stories(first.digest.generated_at.replace(year=2000))[0]
+    assert story.canonical_url == "https://news.example.com/article"
+
+    pipeline_two, store_two = pipeline(
+        tmp_path, valid_config, results={"general": [item]}, classifier=classifier,
+    )
+    assert store_one.path == store_two.path == tmp_path / "state.db"
+
+    second = pipeline_two.run(dry_run=True, force=True)
+
     assert second.accepted_stories == 0
     assert classifier.calls == 1
 
 
-def test_candidate_canonical_story_is_skipped_before_classification_on_second_run(tmp_path, valid_config):
-    item = candidate(url="https://example.com/story?utm_source=google")
-    assert item.grounding_sources == []
+def test_new_story_on_second_run_is_still_classified(tmp_path, valid_config):
+    story_a = candidate(url="https://example.com/a", title="Story A")
+    story_b = candidate(url="https://example.com/b", title="Story B")
     classifier = FakeClassifier()
-    value, store = pipeline(
-        tmp_path, valid_config, results={"general": [item]}, classifier=classifier,
+    writer = FakeWriter()
+    pipeline_one, store_one = pipeline(
+        tmp_path, valid_config, results={"general": [story_a]}, classifier=classifier, writer=writer,
     )
 
-    first = value.run(dry_run=True)
-    second = value.run(dry_run=True, force=True)
+    first = pipeline_one.run(dry_run=True)
 
-    story = store.get_recent_stories(first.digest.generated_at.replace(year=2000))[0]
-    assert story.canonical_url == "https://example.com/story"
-    assert second.accepted_stories == 0
+    assert first.accepted_stories == 1
     assert classifier.calls == 1
+
+    pipeline_two, store_two = pipeline(
+        tmp_path, valid_config, results={"general": [story_a, story_b]}, classifier=classifier, writer=writer,
+    )
+    assert store_one.path == store_two.path == tmp_path / "state.db"
+
+    second = pipeline_two.run(dry_run=True, force=True)
+
+    assert second.accepted_stories == 1
+    assert classifier.calls == 2
+    assert "Story B" in second.digest.plain_text
+    assert "Story A" not in second.digest.plain_text
 
 
 def test_empty_discovery_records_request_usage_and_cost(tmp_path, valid_config):
