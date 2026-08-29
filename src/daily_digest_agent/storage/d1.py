@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from ..models import Digest, SourceRecord, Story, UsageSummary
+from .schema import SCHEMA_META_SQL, SCHEMA_VERSION, USAGE_TABLE_SQL
 
 
 class D1StateStore:
@@ -43,10 +44,8 @@ class D1StateStore:
             """CREATE TABLE IF NOT EXISTS digests (id TEXT PRIMARY KEY, run_id TEXT NOT NULL,
             digest_date TEXT NOT NULL, subject TEXT NOT NULL, plain_text TEXT NOT NULL, html TEXT NOT
             NULL, story_ids_json TEXT NOT NULL, generated_at TEXT NOT NULL, sent_at TEXT)""",
-            """CREATE TABLE IF NOT EXISTS usage (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT
-            NOT NULL, occurred_at TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
-            input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
-            estimated_cost_usd REAL)""",
+            SCHEMA_META_SQL,
+            USAGE_TABLE_SQL,
             "CREATE INDEX IF NOT EXISTS idx_stories_published ON stories(published_at)",
             "CREATE INDEX IF NOT EXISTS idx_stories_first_seen ON stories(first_seen_at)",
             "CREATE INDEX IF NOT EXISTS idx_stories_story_key ON stories(story_key)",
@@ -55,6 +54,17 @@ class D1StateStore:
         ]
         for statement in statements:
             self._query(statement)
+        columns = {row["name"] for row in self._query("PRAGMA table_info(usage)")}
+        if "local_date" not in columns:
+            self._query("ALTER TABLE usage ADD COLUMN local_date TEXT")
+        if "local_month" not in columns:
+            self._query("ALTER TABLE usage ADD COLUMN local_month TEXT")
+        self._query("UPDATE usage SET local_date=substr(occurred_at,1,10) WHERE local_date IS NULL")
+        self._query("UPDATE usage SET local_month=substr(occurred_at,1,7) WHERE local_month IS NULL")
+        self._query("CREATE INDEX IF NOT EXISTS idx_usage_local_date ON usage(local_date)")
+        self._query("CREATE INDEX IF NOT EXISTS idx_usage_local_month ON usage(local_month)")
+        self._query("DELETE FROM schema_meta")
+        self._query("INSERT INTO schema_meta(version) VALUES(?)", [SCHEMA_VERSION])
 
     def story_exists(self, canonical_url: str) -> bool:
         return bool(self._query("SELECT 1 FROM stories WHERE canonical_url=?", [canonical_url]))
@@ -119,15 +129,15 @@ class D1StateStore:
         day = local_date.isoformat()
         month = day[:7]
         daily = self._query(
-            "SELECT provider,COUNT(*) count FROM usage WHERE substr(occurred_at,1,10)=? GROUP BY provider",
+            "SELECT provider,COUNT(*) count FROM usage WHERE local_date=? GROUP BY provider",
             [day],
         )
         monthly = self._query(
-            "SELECT provider,COUNT(*) count FROM usage WHERE substr(occurred_at,1,7)=? GROUP BY provider",
+            "SELECT provider,COUNT(*) count FROM usage WHERE local_month=? GROUP BY provider",
             [month],
         )
         costs = self._query(
-            "SELECT COALESCE(SUM(estimated_cost_usd),0) cost FROM usage WHERE substr(occurred_at,1,7)=?",
+            "SELECT COALESCE(SUM(estimated_cost_usd),0) cost FROM usage WHERE local_month=?",
             [month],
         )
         return UsageSummary(
@@ -136,13 +146,13 @@ class D1StateStore:
             estimated_monthly_cost_usd=float(costs[0]["cost"]),
         )
 
-    def record_usage(self, run_id: str, provider: str, model: str, input_tokens: int,
+    def record_usage(self, run_id: str, local_date: date, provider: str, model: str, input_tokens: int,
                      output_tokens: int, estimated_cost_usd: float | None) -> None:
         self._query(
-            """INSERT INTO usage(run_id,occurred_at,provider,model,input_tokens,output_tokens,
-            estimated_cost_usd) VALUES(?,?,?,?,?,?,?)""",
-            [run_id, datetime.now(UTC).isoformat(), provider, model, input_tokens, output_tokens,
-             estimated_cost_usd],
+            """INSERT INTO usage(run_id,occurred_at,local_date,local_month,provider,model,input_tokens,
+            output_tokens,estimated_cost_usd) VALUES(?,?,?,?,?,?,?,?,?)""",
+            [run_id, datetime.now(UTC).isoformat(), local_date.isoformat(), local_date.strftime("%Y-%m"),
+             provider, model, input_tokens, output_tokens, estimated_cost_usd],
         )
 
     def record_digest(self, digest: Digest, run_id: str) -> str:

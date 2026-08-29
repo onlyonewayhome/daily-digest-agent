@@ -2,7 +2,12 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .config import AppConfig, ModelPrice
-from .exceptions import DailyRunLimitExceeded, MonthlyBudgetExceeded, ProviderBudgetExceeded
+from .exceptions import (
+    DailyRunLimitExceeded,
+    MonthlyBudgetExceeded,
+    ProviderBudgetExceeded,
+    UnknownModelPricingError,
+)
 from .models import UsageSummary
 from .storage.base import StateStore
 
@@ -19,7 +24,7 @@ class BudgetGuard:
             raise DailyRunLimitExceeded("Maximum successful runs for this local date has been reached")
         self._check_monthly(self.store.get_usage(self.local_date))
 
-    def check_request(self, provider: str, unsafe_override: bool = False) -> None:
+    def check_request(self, provider: str, model: str, unsafe_override: bool = False) -> None:
         usage = self.store.get_usage(self.local_date)
         settings = self.config.budget.gemini if provider == "google" else self.config.budget.openai
         calls = self.run_calls.get(provider, 0)
@@ -29,11 +34,20 @@ class BudgetGuard:
             raise ProviderBudgetExceeded(f"{provider} daily call limit reached")
         if not unsafe_override:
             self._check_monthly(usage)
+            prices = self.config.pricing.google if provider == "google" else self.config.pricing.openai
+            price = prices.get(model)
+            if (price is None or price.input_per_million is None or price.output_per_million is None):
+                if not self.config.budget.allow_unknown_pricing:
+                    raise UnknownModelPricingError(
+                        f"No pricing is configured for provider/model {provider}/{model}. "
+                        "Refusing paid request because allow_unknown_pricing is false."
+                    )
         self.run_calls[provider] = calls + 1
 
     def _check_monthly(self, usage: UsageSummary) -> None:
-        if usage.estimated_monthly_cost_usd >= self.config.budget.monthly_usd_cap:
-            raise MonthlyBudgetExceeded("Configured monthly estimated cost cap has been reached")
+        threshold = self.config.budget.monthly_usd_cap - self.config.budget.monthly_safety_buffer_usd
+        if usage.estimated_monthly_cost_usd >= threshold:
+            raise MonthlyBudgetExceeded("Configured monthly estimated cost cap safety threshold has been reached")
 
 
 def estimate_cost(price: ModelPrice | None, input_tokens: int, output_tokens: int) -> float | None:

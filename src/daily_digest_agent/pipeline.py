@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
+from time import sleep
+from typing import TypeVar
 from zoneinfo import ZoneInfo
 
 from .budgeting import BudgetGuard, estimate_cost
@@ -10,13 +13,25 @@ from .config import AppConfig
 from .dedupe import deduplicate_candidates, group_stories_by_key
 from .delivery.base import DeliveryProvider
 from .discovery.base import DiscoveryProvider
-from .exceptions import BudgetExceeded, DiscoveryHealthError, DuplicateDigestError
-from .models import DigestContext, DiscoveryReport, RunResult, SourceRecord, Story
+from .exceptions import BudgetExceeded, DiscoveryHealthError, DuplicateDigestError, ProviderOutputError
+from .models import Digest, DigestContext, DiscoveryReport, RunResult, SourceRecord, Story, UsageBearing
 from .normalize import canonicalize_url
+from .retry import is_retryable_error
 from .storage.base import StateStore
 from .writers.base import DigestWriter
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T", bound=UsageBearing)
+
+
+def build_quiet_day_digest(context: DigestContext, message: str) -> Digest:
+    return Digest(
+        digest_date=context.digest_date,
+        subject=f"{context.digest_name} — {context.digest_date}",
+        plain_text=message,
+        html=f"<p>{message}</p>",
+        generated_at=datetime.now(UTC),
+    )
 
 
 class DigestPipeline:
@@ -31,33 +46,31 @@ class DigestPipeline:
         self.delivery = delivery
 
     def _paid_call(self, guard: BudgetGuard, run_id: str, provider: str, model: str,
-                   operation, attempts: int, unsafe_override: bool):
-        last_error = None
+                   operation: Callable[[], T], attempts: int, unsafe_override: bool) -> T:
+        last_error: Exception | None = None
+        prices = self.config.pricing.google if provider == "google" else self.config.pricing.openai
         for attempt in range(attempts):
-            guard.check_request(provider, unsafe_override)
+            guard.check_request(provider, model, unsafe_override)
             try:
                 result = operation()
-                if isinstance(result, list):
-                    input_tokens = max((item.token_usage.input_tokens for item in result), default=0)
-                    output_tokens = max((item.token_usage.output_tokens for item in result), default=0)
-                else:
-                    input_tokens = result.token_usage.input_tokens
-                    output_tokens = result.token_usage.output_tokens
-                prices = (self.config.pricing.google if provider == "google"
-                          else self.config.pricing.openai)
-                cost = estimate_cost(prices.get(model), input_tokens, output_tokens)
+                usage = result.token_usage
+                cost = estimate_cost(prices.get(model), usage.input_tokens, usage.output_tokens)
+                if cost is None:
+                    logger.warning(
+                        "Paid request cost is unknown; dollar budget accounting is incomplete",
+                        extra={"provider": provider, "model": model, "run_id": run_id},
+                    )
                 self.store.record_usage(
-                    run_id, provider, model, input_tokens, output_tokens, cost
+                    run_id, guard.local_date, provider, model, usage.input_tokens, usage.output_tokens, cost
                 )
                 return result
             except Exception as exc:
-                self.store.record_usage(run_id, provider, model, 0, 0, None)
+                self.store.record_usage(run_id, guard.local_date, provider, model, 0, 0, None)
                 last_error = exc
-                status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
-                if status not in {429, 500, 502, 503, 504} or attempt == attempts - 1:
+                if not is_retryable_error(provider, exc) or attempt == attempts - 1:
                     raise
-                from time import sleep
                 sleep(2**attempt)
+        assert last_error is not None
         raise last_error
 
     def run(self, *, dry_run: bool = False, force: bool = False,
@@ -76,14 +89,14 @@ class DigestPipeline:
             candidates = []
             for mission in self.config.search_missions:
                 try:
-                    found = self._paid_call(
+                    result = self._paid_call(
                         guard, run_id, "google", self.config.models.discovery.model,
                         lambda mission=mission: self.discovery.discover(mission), 3,
                         unsafe_budget_override,
                     )
-                    candidates.extend(found)
+                    candidates.extend(result.stories)
                     report.searches_successful += 1
-                    report.candidates_found += len(found)
+                    report.candidates_found += len(result.stories)
                 except BudgetExceeded:
                     raise
                 except Exception as exc:  # missions are isolated by design
@@ -96,24 +109,33 @@ class DigestPipeline:
             novel = [candidate for candidate in deduplicate_candidates(candidates)
                      if not self.store.story_exists(canonicalize_url(str(candidate.url)))]
             accepted: list[Story] = []
+            configured_ids = {category.id for category in self.config.categories}
             for candidate in novel:
                 classification = self._paid_call(
                     guard, run_id, "google", self.config.models.classification.model,
                     lambda candidate=candidate: self.classifier.classify(candidate), 3,
                     unsafe_budget_override,
                 )
+                if classification.category is not None and classification.category not in configured_ids:
+                    raise ProviderOutputError(
+                        f"Classifier returned unknown category {classification.category!r}; "
+                        f"expected {sorted(configured_ids)}"
+                    )
                 if (not classification.relevant
                         or classification.relevance_score < self.config.filters.minimum_relevance
                         or classification.importance < self.config.filters.minimum_importance):
                     continue
+                sources = candidate.grounding_sources or [
+                    SourceRecord(title=candidate.title, url=candidate.url, publisher=candidate.publisher,
+                                 published_at=candidate.published_at)
+                ]
                 accepted.append(Story(
-                    canonical_url=canonicalize_url(str(candidate.url)), title=candidate.title,
+                    canonical_url=canonicalize_url(str(sources[0].url)), title=candidate.title,
                     publisher=candidate.publisher, published_at=candidate.published_at,
                     first_seen_at=now, last_seen_at=now, category=classification.category,
                     relevance_score=classification.relevance_score, importance=classification.importance,
                     story_key=classification.story_key, factual_summary=classification.factual_summary,
-                    sources=[SourceRecord(title=candidate.title, url=candidate.url,
-                                          publisher=candidate.publisher, published_at=candidate.published_at)]))
+                    sources=sources))
 
             grouped = group_stories_by_key(accepted)
             for story in grouped:
@@ -124,11 +146,14 @@ class DigestPipeline:
                                     editorial_voice=self.config.digest.editorial_voice,
                                     categories=[category.name for category in self.config.categories],
                                     quiet_day=not selected)
-            digest = self._paid_call(
-                guard, run_id, "openai", self.config.models.writer.model,
-                lambda: self.writer.generate_digest(selected, context), 2,
-                unsafe_budget_override,
-            )
+            if selected:
+                digest = self._paid_call(
+                    guard, run_id, "openai", self.config.models.writer.model,
+                    lambda: self.writer.generate_digest(selected, context), 2,
+                    unsafe_budget_override,
+                )
+            else:
+                digest = build_quiet_day_digest(context, self.config.digest.quiet_day_message)
             digest.included_story_ids = [story.id for story in selected if story.id]
             digest_id = self.store.record_digest(digest, run_id)
             digest.id = digest_id

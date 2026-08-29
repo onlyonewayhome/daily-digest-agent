@@ -27,3 +27,9 @@ def test_missing_required_fields_rejected(tmp_path):
     path.write_text("digest: {}")
     with pytest.raises(ConfigurationError):
         load_config(path)
+
+
+def test_budget_safety_buffer_must_be_less_than_cap(valid_config):
+    valid_config["budget"]["monthly_safety_buffer_usd"] = 3.0
+    with pytest.raises(ValueError):
+        AppConfig.model_validate(valid_config)

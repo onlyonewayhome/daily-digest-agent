@@ -17,6 +17,10 @@ class DigestSettings(BaseModel):
     timezone: str
     editorial_voice: str = Field(min_length=1)
     search_window_hours: int = Field(default=36, ge=1, le=336)
+    quiet_day_message: str = Field(
+        default="Quiet day today — no substantial new developments met the configured relevance threshold.",
+        min_length=1,
+    )
 
     @model_validator(mode="after")
     def validate_timezone(self) -> DigestSettings:
@@ -96,9 +100,17 @@ class ProviderBudgetSettings(BaseModel):
 
 class BudgetSettings(BaseModel):
     monthly_usd_cap: float = Field(default=3.0, gt=0)
+    monthly_safety_buffer_usd: float = Field(default=0.25, ge=0)
+    allow_unknown_pricing: bool = False
     max_runs_per_day: int = Field(default=1, ge=1)
     gemini: ProviderBudgetSettings
     openai: ProviderBudgetSettings
+
+    @model_validator(mode="after")
+    def validate_safety_buffer(self) -> BudgetSettings:
+        if self.monthly_safety_buffer_usd >= self.monthly_usd_cap:
+            raise ValueError("monthly_safety_buffer_usd must be less than monthly_usd_cap")
+        return self
 
 
 class ModelPrice(BaseModel):

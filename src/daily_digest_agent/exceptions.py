@@ -22,9 +22,17 @@ class MonthlyBudgetExceeded(BudgetExceeded):
     pass
 
 
+class UnknownModelPricingError(BudgetExceeded):
+    pass
+
+
 class DuplicateDigestError(DailyDigestError):
     pass
 
 
 class DiscoveryHealthError(DailyDigestError):
+    pass
+
+
+class ProviderOutputError(DailyDigestError):
     pass

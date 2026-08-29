@@ -30,7 +30,7 @@ recipient, or provider credential assumptions.
 - Relevance, category, and 0–5 importance classification
 - SQLite development state and parameterized Cloudflare D1 REST persistence
 - Hard per-run, daily, and estimated monthly application limits
-- Quiet-day output only when discovery coverage is healthy
+- Deterministic quiet-day output only when discovery coverage is healthy, without a writer-model call
 - Structured OpenAI writer output with plain text and email-safe HTML
 - Console and Gmail OAuth delivery
 - Local-date idempotency, UTC internal timestamps, bounded retries, and prompt-injection guardrails
@@ -52,6 +52,8 @@ Copy `config/example.yaml` to `config/digest.yaml`, then change only configurati
 topic, categories, missions, thresholds, models, storage, and delivery. Model names are deliberately
 configurable because provider availability changes. The configured default writer identifier is
 `gpt-5.6-luna`; confirm that the identifier is enabled for your OpenAI project before a live run.
+The example pricing values are placeholders, not guaranteed-current vendor prices. Verify all model
+prices against provider documentation before deployment.
 
 ## Commands
 
@@ -105,14 +107,20 @@ pytest
 ## Cost safeguards
 
 The state store, not GitHub Actions, records calls and successful runs. Checks happen before the run
-and every paid request. Retries are bounded and each retry must pass the same request guard. Optional
-model pricing yields an application safety estimate, not a billing guarantee. If pricing is absent,
-call ceilings still apply and the framework does not pretend cost is known exactly.
+and every paid request. Retries are bounded and each retry counts as another provider call. Operational
+timestamps are stored in UTC, while daily and monthly budget accounting uses the configured digest-local
+calendar date and month. This prevents UTC boundaries from moving usage into the wrong accounting day.
+
+Model pricing is user-maintained configuration because vendor prices change. Missing pricing blocks
+paid requests by default. `allow_unknown_pricing: true` permits calls under request-count limits but
+logs that dollar accounting is incomplete. The monthly safety buffer stops new calls conservatively
+before the cap. Provider-side billing remains authoritative.
 
 ## Failure and security model
 
 Discovery missions fail independently, but the normal newsletter is withheld when the configured
-success ratio is not met. A healthy zero-result run produces a short quiet-day digest. Accepted
+success ratio is not met. A healthy zero-result run produces and persists a short deterministic
+quiet-day digest without invoking OpenAI. Accepted
 stories are persisted even when omitted due to the digest story limit. Sent digests are protected by
 local-date idempotency.
 
@@ -120,6 +128,11 @@ Public web content is hostile input. Prompts label source material as data, igno
 instructions, prohibit secret disclosure/provider changes/external actions, and require supplied
 evidence and URLs only. API tokens should be project-scoped and least-privilege. Logs must never
 contain credentials or authorization headers.
+
+Gemini discovery uses schema-validated output. Google Search grounding metadata is extracted into
+typed source records and is preferred over model-emitted URL text when available. The writer receives
+only application-provided source URLs, is instructed to preserve them exactly, and rejects unexpected
+external URLs in generated output.
 
 ## Production deployment
 

@@ -4,6 +4,7 @@ digest:
   timezone: America/Los_Angeles
   editorial_voice: Concise, informative, approachable, factual, and useful. Prioritize important developments over filler.
   search_window_hours: 36
+  quiet_day_message: Quiet day today — no substantial new developments met the configured relevance threshold.
 topic:
   name: Example Topic
   description: Substantive developments directly concerning the configured example topic.
@@ -30,10 +31,16 @@ delivery: {provider: console, save_html_path: ./output}
 filters: {minimum_importance: 3, minimum_relevance: 0.60, maximum_stories_per_digest: 15}
 budget:
   monthly_usd_cap: 3.00
+  monthly_safety_buffer_usd: 0.25
+  allow_unknown_pricing: false
   max_runs_per_day: 1
   gemini: {max_calls_per_run: 20, max_calls_per_day: 25}
   openai: {max_calls_per_run: 2, max_calls_per_day: 3, max_output_tokens_per_digest: 5000}
 pricing:
-  google: {}
-  openai: {}
+  # Example values only. Verify current provider pricing before every deployment.
+  google:
+    gemini-2.5-flash: {input_per_million: 1.00, output_per_million: 1.00}
+    gemini-2.5-flash-lite: {input_per_million: 1.00, output_per_million: 1.00}
+  openai:
+    gpt-5.6-luna: {input_per_million: 1.00, output_per_million: 1.00}
 health: {minimum_search_success_ratio: 0.75}

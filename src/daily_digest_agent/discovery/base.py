@@ -1,8 +1,8 @@
 from typing import Protocol
 
 from ..config import SearchMissionSettings
-from ..models import CandidateStory
+from ..models import DiscoveryResult
 
 
 class DiscoveryProvider(Protocol):
-    def discover(self, mission: SearchMissionSettings) -> list[CandidateStory]: ...
+    def discover(self, mission: SearchMissionSettings) -> DiscoveryResult: ...

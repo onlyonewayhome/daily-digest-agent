@@ -1,9 +1,26 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Protocol
 
 from pydantic import BaseModel, Field, HttpUrl
+
+
+class TokenUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_cost_usd: float | None = None
+
+
+class UsageBearing(Protocol):
+    token_usage: TokenUsage
+
+
+class SourceRecord(BaseModel):
+    title: str
+    url: HttpUrl
+    publisher: str | None = None
+    published_at: datetime | None = None
 
 
 class CandidateStory(BaseModel):
@@ -14,11 +31,12 @@ class CandidateStory(BaseModel):
     summary: str | None = None
     discovery_mission: str
     locations: list[str] = Field(default_factory=list)
-    source_metadata: dict[str, Any] = Field(default_factory=dict)
+    grounding_sources: list[SourceRecord] = Field(default_factory=list)
 
-    @property
-    def token_usage(self) -> TokenUsage:
-        return TokenUsage.model_validate(self.source_metadata.get("token_usage", {}))
+
+class DiscoveryResult(BaseModel):
+    stories: list[CandidateStory] = Field(default_factory=list)
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
 class StoryClassification(BaseModel):
@@ -29,14 +47,7 @@ class StoryClassification(BaseModel):
     story_key: str = Field(min_length=1)
     reasoning_summary: str
     factual_summary: str
-    token_usage: TokenUsage = Field(default_factory=lambda: TokenUsage())
-
-
-class SourceRecord(BaseModel):
-    title: str
-    url: HttpUrl
-    publisher: str | None = None
-    published_at: datetime | None = None
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
 class Story(BaseModel):
@@ -66,7 +77,7 @@ class Digest(BaseModel):
     included_story_ids: list[str] = Field(default_factory=list)
     generated_at: datetime
     sent_at: datetime | None = None
-    token_usage: TokenUsage = Field(default_factory=lambda: TokenUsage())
+    token_usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
 class DigestContext(BaseModel):
@@ -93,12 +104,6 @@ class UsageSummary(BaseModel):
     provider_calls_today: dict[str, int] = Field(default_factory=dict)
     provider_calls_month: dict[str, int] = Field(default_factory=dict)
     estimated_monthly_cost_usd: float = 0.0
-
-
-class TokenUsage(BaseModel):
-    input_tokens: int = 0
-    output_tokens: int = 0
-    estimated_cost_usd: float | None = None
 
 
 class RunResult(BaseModel):
