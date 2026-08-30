@@ -21,6 +21,19 @@ class SQLiteBackedD1Store(D1StateStore):
         return rows
 
 
+class InterleavingD1Store(SQLiteBackedD1Store):
+    def __init__(self) -> None:
+        super().__init__()
+        self.before_insert = None
+
+    def _query(self, sql, params=None):
+        if self.before_insert is not None and sql.lstrip().startswith("INSERT INTO budget_reservations"):
+            callback = self.before_insert
+            self.before_insert = None
+            callback()
+        return super()._query(sql, params)
+
+
 @pytest.fixture(params=["sqlite", "d1"], ids=["sqlite", "d1"])
 def store(request, tmp_path) -> StateStore:
     value: StateStore
@@ -135,6 +148,42 @@ def test_budget_reservation_contract(store):
 
     store.record_usage("run", local_date, "google", "gemini", 10, 5, 0.10)
     assert store.reserve_budget("run", local_date, "google", "gemini", 0.40, 1.00) is not None
+
+
+def test_d1_budget_reservation_uses_single_conditional_insert():
+    store = SQLiteBackedD1Store()
+    store.initialize()
+    calls = []
+    original = store._query
+
+    def query(sql, params=None):
+        calls.append(sql)
+        return original(sql, params)
+
+    store._query = query
+    assert store.reserve_budget("run", date(2026, 8, 30), "google", "gemini", 0.40, 1.00) is not None
+    reservation_calls = [sql for sql in calls if "budget_reservations" in sql]
+    assert reservation_calls[0].lstrip().startswith("INSERT INTO budget_reservations")
+    assert "WHERE COALESCE" in reservation_calls[0]
+
+
+def test_d1_conditional_budget_insert_observes_competing_reservation():
+    store = InterleavingD1Store()
+    store.initialize()
+    local_date = date(2026, 8, 30)
+
+    def competing_insert():
+        SQLiteBackedD1Store._query(
+            store,
+            """INSERT INTO budget_reservations(
+            id,run_id,local_date,local_month,provider,model,reserved_cost_usd,state,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            ["other", "run", local_date.isoformat(), "2026-08", "google", "gemini", 0.70,
+             "reserved", "2026-08-30T00:00:00+00:00", "2026-08-30T00:00:00+00:00"],
+        )
+
+    store.before_insert = competing_insert
+    assert store.reserve_budget("run", local_date, "google", "gemini", 0.40, 1.00) is None
 
 
 def test_digest_and_sent_state_contract(store):

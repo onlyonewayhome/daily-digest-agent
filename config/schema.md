@@ -27,3 +27,5 @@ the application supports instead of silently overwriting its metadata.
 Version 3 adds delivery attempts with a unique date/attempt reservation and explicit `pending`,
 `sending`, `sent`, `failed`, and `unknown` states. Previously sent digests are migrated as attempt 0.
 Version 4 adds persistent request-cost reservations and reconciliation state.
+SQLite reserves under an immediate write transaction. D1 uses single-statement conditional inserts;
+the REST API does not expose the Workers Binding API's transactional batch method.

@@ -174,27 +174,21 @@ class D1StateStore:
     def reserve_budget(self, run_id: str, local_date: date, provider: str, model: str,
                        reserved_cost_usd: float, monthly_limit_usd: float) -> str | None:
         month = local_date.strftime("%Y-%m")
-        usage = self._query(
-            "SELECT COALESCE(SUM(estimated_cost_usd),0) cost FROM usage WHERE local_month=?",
-            [month],
-        )
-        reserved = self._query(
-            """SELECT COALESCE(SUM(reserved_cost_usd),0) cost FROM budget_reservations
-            WHERE local_month=? AND state='reserved'""",
-            [month],
-        )
-        if float(usage[0]["cost"]) + float(reserved[0]["cost"]) + reserved_cost_usd > monthly_limit_usd:
-            return None
         reservation_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
         self._query(
             """INSERT INTO budget_reservations(
             id,run_id,local_date,local_month,provider,model,reserved_cost_usd,state,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            ) SELECT ?,?,?,?,?,?,?,?, ?,?
+            WHERE COALESCE((SELECT SUM(estimated_cost_usd) FROM usage WHERE local_month=?),0)
+                + COALESCE((SELECT SUM(reserved_cost_usd) FROM budget_reservations
+                            WHERE local_month=? AND state='reserved'),0) + ? <= ?""",
             [reservation_id, run_id, local_date.isoformat(), month, provider, model,
-             reserved_cost_usd, "reserved", now, now],
+             reserved_cost_usd, "reserved", now, now, month, month, reserved_cost_usd, monthly_limit_usd],
         )
-        return reservation_id
+        return reservation_id if self._query(
+            "SELECT 1 FROM budget_reservations WHERE id=?", [reservation_id]
+        ) else None
 
     def reconcile_budget(self, reservation_id: str, actual_cost_usd: float) -> None:
         self._query(
@@ -226,27 +220,25 @@ class D1StateStore:
         return digest_id
 
     def reserve_delivery(self, digest_date: date, run_id: str, force: bool = False) -> str | None:
-        rows = self._query(
-            "SELECT attempt,state FROM deliveries WHERE digest_date=? ORDER BY attempt DESC LIMIT 1",
-            [digest_date.isoformat()],
-        )
-        if rows and not force:
-            return None
-        attempt = int(rows[0]["attempt"]) + 1 if rows else 1
         delivery_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
-        try:
+        if force:
             self._query(
                 """INSERT INTO deliveries(
                 id,digest_date,attempt,run_id,state,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,?)""",
-                [delivery_id, digest_date.isoformat(), attempt, run_id, "pending", now, now],
+                ) SELECT ?,?,COALESCE(MAX(attempt),0)+1,?,?,?,? FROM deliveries WHERE digest_date=?""",
+                [delivery_id, digest_date.isoformat(), run_id, "pending", now, now, digest_date.isoformat()],
             )
-        except Exception as exc:
-            if "UNIQUE" in str(exc).upper() or "CONSTRAINT" in str(exc).upper():
-                return None
-            raise
-        return delivery_id
+        else:
+            self._query(
+                """INSERT INTO deliveries(
+                id,digest_date,attempt,run_id,state,created_at,updated_at
+                ) SELECT ?,?,1,?,?,?,? WHERE NOT EXISTS(
+                    SELECT 1 FROM deliveries WHERE digest_date=?
+                )""",
+                [delivery_id, digest_date.isoformat(), run_id, "pending", now, now, digest_date.isoformat()],
+            )
+        return delivery_id if self._query("SELECT 1 FROM deliveries WHERE id=?", [delivery_id]) else None
 
     def update_delivery(self, delivery_id: str, state: str, digest_id: str | None = None,
                         error: str | None = None) -> None:

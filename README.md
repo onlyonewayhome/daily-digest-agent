@@ -129,6 +129,11 @@ before execution and reconciles successful calls to actual token usage. Failed o
 their reservation, preventing concurrent or retrying workers from overspending the application
 threshold. Provider-side billing remains authoritative.
 
+SQLite performs budget reservations under `BEGIN IMMEDIATE`. D1 uses a single conditional
+`INSERT ... SELECT ... WHERE` statement so its aggregate budget check and reservation are evaluated by
+the database as one write operation. The REST API does not expose the Workers Binding API's
+transactional `batch()` primitive, so cross-statement atomic operations are intentionally avoided.
+
 ## Failure and security model
 
 Discovery missions fail independently, but the normal newsletter is withheld when the configured
