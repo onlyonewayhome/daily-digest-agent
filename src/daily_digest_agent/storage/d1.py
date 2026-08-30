@@ -7,8 +7,9 @@ from typing import Any
 
 import httpx
 
+from ..exceptions import StorageSchemaError
 from ..models import Digest, SourceRecord, Story, UsageSummary
-from .schema import SCHEMA_META_SQL, SCHEMA_VERSION, USAGE_TABLE_SQL
+from .schema import BASE_SCHEMA_STATEMENTS, SCHEMA_META_SQL, SCHEMA_VERSION, USAGE_DATE_INDEX_STATEMENTS
 
 
 class D1StateStore:
@@ -31,40 +32,33 @@ class D1StateStore:
         return results[0].get("results", []) if results else []
 
     def initialize(self) -> None:
-        statements = [
-            """CREATE TABLE IF NOT EXISTS stories (id TEXT PRIMARY KEY, canonical_url TEXT NOT NULL
-            UNIQUE, title TEXT NOT NULL, publisher TEXT, published_at TEXT, first_seen_at TEXT NOT
-            NULL, last_seen_at TEXT NOT NULL, category TEXT, relevance_score REAL NOT NULL,
-            importance INTEGER NOT NULL, story_key TEXT NOT NULL, factual_summary TEXT NOT NULL,
-            sources_json TEXT NOT NULL, included_in_digest INTEGER NOT NULL DEFAULT 0,
-            digest_id TEXT)""",
-            """CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, local_date TEXT NOT NULL,
-            started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL, forced INTEGER NOT NULL,
-            error TEXT)""",
-            """CREATE TABLE IF NOT EXISTS digests (id TEXT PRIMARY KEY, run_id TEXT NOT NULL,
-            digest_date TEXT NOT NULL, subject TEXT NOT NULL, plain_text TEXT NOT NULL, html TEXT NOT
-            NULL, story_ids_json TEXT NOT NULL, generated_at TEXT NOT NULL, sent_at TEXT)""",
-            SCHEMA_META_SQL,
-            USAGE_TABLE_SQL,
-            "CREATE INDEX IF NOT EXISTS idx_stories_published ON stories(published_at)",
-            "CREATE INDEX IF NOT EXISTS idx_stories_first_seen ON stories(first_seen_at)",
-            "CREATE INDEX IF NOT EXISTS idx_stories_story_key ON stories(story_key)",
-            "CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(local_date)",
-            "CREATE INDEX IF NOT EXISTS idx_usage_occurred ON usage(occurred_at)",
-        ]
-        for statement in statements:
-            self._query(statement)
-        columns = {row["name"] for row in self._query("PRAGMA table_info(usage)")}
-        if "local_date" not in columns:
-            self._query("ALTER TABLE usage ADD COLUMN local_date TEXT")
-        if "local_month" not in columns:
-            self._query("ALTER TABLE usage ADD COLUMN local_month TEXT")
-        self._query("UPDATE usage SET local_date=substr(occurred_at,1,10) WHERE local_date IS NULL")
-        self._query("UPDATE usage SET local_month=substr(occurred_at,1,7) WHERE local_month IS NULL")
-        self._query("CREATE INDEX IF NOT EXISTS idx_usage_local_date ON usage(local_date)")
-        self._query("CREATE INDEX IF NOT EXISTS idx_usage_local_month ON usage(local_month)")
+        self._query(SCHEMA_META_SQL)
+        rows = self._query("SELECT version FROM schema_meta LIMIT 1")
+        version = int(rows[0]["version"]) if rows else 0
+        if version > SCHEMA_VERSION:
+            raise StorageSchemaError(
+                f"Database schema version {version} is newer than supported version {SCHEMA_VERSION}"
+            )
+        if version < 1:
+            for statement in BASE_SCHEMA_STATEMENTS:
+                self._query(statement)
+            self._set_schema_version(1)
+            version = 1
+        if version < 2:
+            columns = {row["name"] for row in self._query("PRAGMA table_info(usage)")}
+            if "local_date" not in columns:
+                self._query("ALTER TABLE usage ADD COLUMN local_date TEXT")
+            if "local_month" not in columns:
+                self._query("ALTER TABLE usage ADD COLUMN local_month TEXT")
+            self._query("UPDATE usage SET local_date=substr(occurred_at,1,10) WHERE local_date IS NULL")
+            self._query("UPDATE usage SET local_month=substr(occurred_at,1,7) WHERE local_month IS NULL")
+            for statement in USAGE_DATE_INDEX_STATEMENTS:
+                self._query(statement)
+            self._set_schema_version(2)
+
+    def _set_schema_version(self, version: int) -> None:
         self._query("DELETE FROM schema_meta")
-        self._query("INSERT INTO schema_meta(version) VALUES(?)", [SCHEMA_VERSION])
+        self._query("INSERT INTO schema_meta(version) VALUES(?)", [version])
 
     def story_exists(self, canonical_url: str) -> bool:
         return bool(self._query("SELECT 1 FROM stories WHERE canonical_url=?", [canonical_url]))

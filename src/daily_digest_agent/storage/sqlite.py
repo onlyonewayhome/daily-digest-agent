@@ -6,8 +6,9 @@ import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from ..exceptions import StorageSchemaError
 from ..models import Digest, SourceRecord, Story, UsageSummary
-from .schema import SCHEMA_META_SQL, SCHEMA_VERSION, USAGE_TABLE_SQL
+from .schema import BASE_SCHEMA_STATEMENTS, SCHEMA_META_SQL, SCHEMA_VERSION, USAGE_DATE_INDEX_STATEMENTS
 
 
 class SQLiteStateStore:
@@ -22,43 +23,34 @@ class SQLiteStateStore:
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as db:
-            db.executescript("""
-            CREATE TABLE IF NOT EXISTS stories (
-              id TEXT PRIMARY KEY, canonical_url TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
-              publisher TEXT, published_at TEXT, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
-              category TEXT, relevance_score REAL NOT NULL, importance INTEGER NOT NULL,
-              story_key TEXT NOT NULL, factual_summary TEXT NOT NULL, sources_json TEXT NOT NULL,
-              included_in_digest INTEGER NOT NULL DEFAULT 0, digest_id TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_stories_published ON stories(published_at);
-            CREATE INDEX IF NOT EXISTS idx_stories_first_seen ON stories(first_seen_at);
-            CREATE INDEX IF NOT EXISTS idx_stories_story_key ON stories(story_key);
-            CREATE TABLE IF NOT EXISTS runs (
-              id TEXT PRIMARY KEY, local_date TEXT NOT NULL, started_at TEXT NOT NULL,
-              finished_at TEXT, status TEXT NOT NULL, forced INTEGER NOT NULL, error TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_runs_date ON runs(local_date);
-            CREATE TABLE IF NOT EXISTS digests (
-              id TEXT PRIMARY KEY, run_id TEXT NOT NULL, digest_date TEXT NOT NULL,
-              subject TEXT NOT NULL, plain_text TEXT NOT NULL, html TEXT NOT NULL,
-              story_ids_json TEXT NOT NULL, generated_at TEXT NOT NULL, sent_at TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_digests_date ON digests(digest_date);
-            """)
             db.execute(SCHEMA_META_SQL)
-            db.execute(USAGE_TABLE_SQL)
-            columns = {row["name"] for row in db.execute("PRAGMA table_info(usage)").fetchall()}
-            if "local_date" not in columns:
-                db.execute("ALTER TABLE usage ADD COLUMN local_date TEXT")
-            if "local_month" not in columns:
-                db.execute("ALTER TABLE usage ADD COLUMN local_month TEXT")
-            db.execute("UPDATE usage SET local_date=substr(occurred_at,1,10) WHERE local_date IS NULL")
-            db.execute("UPDATE usage SET local_month=substr(occurred_at,1,7) WHERE local_month IS NULL")
-            db.execute("CREATE INDEX IF NOT EXISTS idx_usage_occurred ON usage(occurred_at)")
-            db.execute("CREATE INDEX IF NOT EXISTS idx_usage_local_date ON usage(local_date)")
-            db.execute("CREATE INDEX IF NOT EXISTS idx_usage_local_month ON usage(local_month)")
-            db.execute("DELETE FROM schema_meta")
-            db.execute("INSERT INTO schema_meta(version) VALUES(?)", (SCHEMA_VERSION,))
+            row = db.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
+            version = int(row["version"]) if row else 0
+            if version > SCHEMA_VERSION:
+                raise StorageSchemaError(
+                    f"Database schema version {version} is newer than supported version {SCHEMA_VERSION}"
+                )
+            if version < 1:
+                for statement in BASE_SCHEMA_STATEMENTS:
+                    db.execute(statement)
+                self._set_schema_version(db, 1)
+                version = 1
+            if version < 2:
+                columns = {row["name"] for row in db.execute("PRAGMA table_info(usage)").fetchall()}
+                if "local_date" not in columns:
+                    db.execute("ALTER TABLE usage ADD COLUMN local_date TEXT")
+                if "local_month" not in columns:
+                    db.execute("ALTER TABLE usage ADD COLUMN local_month TEXT")
+                db.execute("UPDATE usage SET local_date=substr(occurred_at,1,10) WHERE local_date IS NULL")
+                db.execute("UPDATE usage SET local_month=substr(occurred_at,1,7) WHERE local_month IS NULL")
+                for statement in USAGE_DATE_INDEX_STATEMENTS:
+                    db.execute(statement)
+                self._set_schema_version(db, 2)
+
+    @staticmethod
+    def _set_schema_version(db: sqlite3.Connection, version: int) -> None:
+        db.execute("DELETE FROM schema_meta")
+        db.execute("INSERT INTO schema_meta(version) VALUES(?)", (version,))
 
     def story_exists(self, canonical_url: str) -> bool:
         with self._connect() as db:

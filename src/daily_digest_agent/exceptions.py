@@ -6,6 +6,10 @@ class ConfigurationError(DailyDigestError):
     pass
 
 
+class StorageSchemaError(DailyDigestError):
+    pass
+
+
 class BudgetExceeded(DailyDigestError):
     pass
 

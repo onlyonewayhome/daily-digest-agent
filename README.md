@@ -117,6 +117,9 @@ The state store, not GitHub Actions, records calls and successful runs. Checks h
 and every paid request. Retries are bounded and each retry counts as another provider call. Operational
 timestamps are stored in UTC, while daily and monthly budget accounting uses the configured digest-local
 calendar date and month. This prevents UTC boundaries from moving usage into the wrong accounting day.
+SQLite and D1 use forward-only numbered schema migrations. Initialization is repeatable, legacy
+unversioned databases are upgraded, and startup fails closed if the database schema is newer than the
+running application.
 
 Model pricing is user-maintained configuration because vendor prices change. Missing pricing blocks
 paid requests by default. `allow_unknown_pricing: true` permits calls under request-count limits but

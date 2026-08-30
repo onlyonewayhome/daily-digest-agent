@@ -1,8 +1,13 @@
 import sqlite3
 from datetime import date
 
+import pytest
+
+from daily_digest_agent.exceptions import StorageSchemaError
 from daily_digest_agent.storage.d1 import D1StateStore
+from daily_digest_agent.storage.schema import SCHEMA_VERSION
 from daily_digest_agent.storage.sqlite import SQLiteStateStore
+from tests.test_storage_contract import SQLiteBackedD1Store
 
 
 def test_sqlite_usage_uses_explicit_local_month_at_utc_boundary(tmp_path):
@@ -34,6 +39,38 @@ def test_sqlite_migrates_legacy_usage_table(tmp_path):
     with store._connect() as db:
         row = db.execute("SELECT local_date,local_month FROM usage").fetchone()
     assert tuple(row) == ("2026-09-01", "2026-09")
+
+
+def test_sqlite_initialize_is_repeatable_and_preserves_schema_version(tmp_path):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.initialize()
+    store.initialize()
+    with store._connect() as db:
+        assert db.execute("SELECT version FROM schema_meta").fetchone()["version"] == SCHEMA_VERSION
+
+
+def test_sqlite_rejects_future_schema_version(tmp_path):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.initialize()
+    with store._connect() as db:
+        db.execute("UPDATE schema_meta SET version=?", (SCHEMA_VERSION + 1,))
+    with pytest.raises(StorageSchemaError, match="newer than supported"):
+        store.initialize()
+
+
+def test_d1_initialize_is_repeatable_and_preserves_schema_version():
+    store = SQLiteBackedD1Store()
+    store.initialize()
+    store.initialize()
+    assert store._query("SELECT version FROM schema_meta") == [{"version": SCHEMA_VERSION}]
+
+
+def test_d1_rejects_future_schema_version():
+    store = SQLiteBackedD1Store()
+    store.initialize()
+    store._query("UPDATE schema_meta SET version=?", [SCHEMA_VERSION + 1])
+    with pytest.raises(StorageSchemaError, match="newer than supported"):
+        store.initialize()
 
 
 def test_d1_usage_queries_and_insert_use_logical_dates():

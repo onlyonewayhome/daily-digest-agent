@@ -17,4 +17,7 @@ requests unless `allow_unknown_pricing` is explicitly enabled; in that mode call
 but dollar accounting is incomplete. Never place secrets in YAML.
 
 Operational timestamps are UTC. Usage rows separately store the configured digest-local date and
-month used for daily and monthly accounting. Storage schema version 2 adds those logical fields.
+month used for daily and monthly accounting. Storage uses forward-only numbered migrations. Fresh and
+unversioned legacy databases bootstrap at version 1, then advance one version at a time. Version 2 adds
+the logical usage date and month fields. Startup refuses a database whose schema version is newer than
+the application supports instead of silently overwriting its metadata.
