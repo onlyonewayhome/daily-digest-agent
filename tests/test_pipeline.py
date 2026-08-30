@@ -195,6 +195,49 @@ def test_pipeline_uses_candidate_url_when_grounding_sources_are_empty(tmp_path, 
     assert story.canonical_url == "https://example.com/story"
     assert len(story.sources) == 1
     assert str(story.sources[0].url) == str(item.url)
+    assert result.discovery.candidates_grounded == 0
+    assert result.discovery.candidates_ungrounded == 1
+    assert result.discovery.candidates_rejected_ungrounded == 0
+
+
+def test_required_grounding_rejects_ungrounded_candidate_before_classification(tmp_path, valid_config):
+    valid_config["sources"]["grounding_policy"] = "require"
+    classifier = FakeClassifier()
+    writer = FakeWriter()
+    value, store = pipeline(
+        tmp_path,
+        valid_config,
+        results={"general": [candidate()]},
+        classifier=classifier,
+        writer=writer,
+    )
+
+    result = value.run(dry_run=True)
+
+    assert result.accepted_stories == 0
+    assert result.classification.attempted == 0
+    assert result.discovery.candidates_grounded == 0
+    assert result.discovery.candidates_ungrounded == 1
+    assert result.discovery.candidates_rejected_ungrounded == 1
+    assert classifier.calls == 0
+    assert writer.calls == 0
+    assert store.get_recent_stories(result.digest.generated_at.replace(year=2000)) == []
+
+
+def test_required_grounding_keeps_grounded_candidate(tmp_path, valid_config):
+    valid_config["sources"]["grounding_policy"] = "require"
+    item = candidate(url="https://news.example.com/article?utm_source=x")
+    item.grounding_sources = [SourceRecord(title=item.title, url="https://news.example.com/article")]
+    classifier = FakeClassifier()
+    value, _ = pipeline(tmp_path, valid_config, results={"general": [item]}, classifier=classifier)
+
+    result = value.run(dry_run=True)
+
+    assert result.accepted_stories == 1
+    assert result.discovery.candidates_grounded == 1
+    assert result.discovery.candidates_ungrounded == 0
+    assert result.discovery.candidates_rejected_ungrounded == 0
+    assert classifier.calls == 1
 
 
 def test_pipeline_uses_matched_grounding_source_as_authoritative(tmp_path, valid_config):

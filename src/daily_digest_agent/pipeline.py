@@ -112,6 +112,10 @@ class DigestPipeline:
                     candidates.extend(result.stories)
                     report.searches_successful += 1
                     report.candidates_found += len(result.stories)
+                    report.candidates_grounded += sum(bool(candidate.grounding_sources) for candidate in result.stories)
+                    report.candidates_ungrounded += sum(
+                        not candidate.grounding_sources for candidate in result.stories
+                    )
                 except BudgetExceeded:
                     raise
                 except Exception as exc:  # missions are isolated by design
@@ -120,10 +124,14 @@ class DigestPipeline:
                     logger.exception("Discovery mission failed", extra={"mission": mission.id, "run_id": run_id})
             if report.success_ratio < self.config.health.minimum_search_success_ratio:
                 raise DiscoveryHealthError("Digest not generated because discovery coverage was insufficient")
-            novel = [
-                candidate for candidate in deduplicate_candidates(candidates)
-                if not self.store.story_exists(canonical_story_url(candidate))
-            ]
+            unique_candidates = deduplicate_candidates(candidates)
+            if self.config.sources.grounding_policy == "require":
+                report.candidates_rejected_ungrounded = sum(
+                    not candidate.grounding_sources for candidate in unique_candidates
+                )
+                unique_candidates = [candidate for candidate in unique_candidates if candidate.grounding_sources]
+            novel = [candidate for candidate in unique_candidates
+                     if not self.store.story_exists(canonical_story_url(candidate))]
             accepted: list[Story] = []
             classification_report = ClassificationReport()
             configured_ids = {category.id for category in self.config.categories}

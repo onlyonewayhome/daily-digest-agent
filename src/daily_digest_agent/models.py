@@ -93,6 +93,9 @@ class DiscoveryReport(BaseModel):
     searches_successful: int
     searches_failed: int
     candidates_found: int
+    candidates_grounded: int = 0
+    candidates_ungrounded: int = 0
+    candidates_rejected_ungrounded: int = 0
     errors: list[str] = Field(default_factory=list)
 
     @property

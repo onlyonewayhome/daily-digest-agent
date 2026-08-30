@@ -56,6 +56,7 @@ class SearchMissionSettings(StrictConfigModel):
 class SourcesSettings(StrictConfigModel):
     preferred_domains: list[str] = Field(default_factory=list)
     ignored_domains: list[str] = Field(default_factory=list)
+    grounding_policy: Literal["prefer", "require"] = "prefer"
 
 
 class ModelProviderSettings(StrictConfigModel):

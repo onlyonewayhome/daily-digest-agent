@@ -22,6 +22,7 @@ search_missions:
 sources:
   preferred_domains: []
   ignored_domains: []
+  grounding_policy: prefer
 models:
   discovery: {provider: google, model: gemini-2.5-flash, grounding: google_search}
   classification: {provider: google, model: gemini-2.5-flash-lite}

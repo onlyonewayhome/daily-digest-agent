@@ -45,3 +45,14 @@ def test_unknown_nested_setting_is_rejected(valid_config):
     valid_config["budget"]["max_runs_per_dya"] = 99
     with pytest.raises(ValueError, match="max_runs_per_dya"):
         AppConfig.model_validate(valid_config)
+
+
+def test_grounding_policy_defaults_to_prefer(valid_config):
+    valid_config["sources"].pop("grounding_policy", None)
+    assert AppConfig.model_validate(valid_config).sources.grounding_policy == "prefer"
+
+
+def test_invalid_grounding_policy_is_rejected(valid_config):
+    valid_config["sources"]["grounding_policy"] = "optional"
+    with pytest.raises(ValueError, match="grounding_policy"):
+        AppConfig.model_validate(valid_config)

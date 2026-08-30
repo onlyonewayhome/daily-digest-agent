@@ -26,6 +26,7 @@ recipient, or provider credential assumptions.
 ## Features
 
 - Independent grounded discovery missions with health accounting
+- Configurable strict rejection and reporting of candidates without matching grounding metadata
 - Deterministic URL canonicalization and semantic story grouping
 - Relevance, category, and 0–5 importance classification
 - SQLite development state and parameterized Cloudflare D1 REST persistence
@@ -130,9 +131,12 @@ evidence and URLs only. API tokens should be project-scoped and least-privilege.
 contain credentials or authorization headers.
 
 Gemini discovery uses schema-validated output. Google Search grounding metadata is extracted into
-typed source records and is preferred over model-emitted URL text when available. The writer receives
-only application-provided source URLs, is instructed to preserve them exactly, and rejects unexpected
-external URLs in generated output.
+typed source records. `sources.grounding_policy: prefer` preserves the previous fallback to a
+model-emitted URL when no matching grounding record exists, while reporting grounded and ungrounded
+candidate counts. `sources.grounding_policy: require` rejects ungrounded candidates before
+classification and is recommended when every published URL must be directly grounded. The writer
+receives only application-provided source URLs, is instructed to preserve them exactly, and rejects
+unexpected external URLs in generated output.
 
 ## Production deployment
 
