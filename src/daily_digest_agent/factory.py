@@ -3,6 +3,7 @@ import os
 from .config import AppConfig
 from .exceptions import ConfigurationError
 from .pipeline import DigestPipeline
+from .storage.base import StateStore
 
 
 def required_env(name: str) -> str:
@@ -12,7 +13,7 @@ def required_env(name: str) -> str:
     return value
 
 
-def create_store(config: AppConfig):
+def create_store(config: AppConfig) -> StateStore:
     if config.storage.provider == "sqlite":
         from .storage.sqlite import SQLiteStateStore
         return SQLiteStateStore(config.storage.sqlite_path)

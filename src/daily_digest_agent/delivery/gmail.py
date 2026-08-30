@@ -1,5 +1,6 @@
 import base64
 from email.message import EmailMessage
+from typing import Any
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -33,11 +34,11 @@ class GmailDeliveryProvider:
         message.add_alternative(digest.html, subtype="html")
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
 
-        def send():
+        def send() -> Any:
             service = build("gmail", "v1", credentials=self.credentials, cache_discovery=False)
             return service.users().messages().send(userId="me", body={"raw": raw}).execute()
 
-        last_error = None
+        last_error: Exception | None = None
         for attempt in range(2):
             try:
                 send()
@@ -47,4 +48,5 @@ class GmailDeliveryProvider:
                 status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
                 if status not in {429, 500, 502, 503, 504} or attempt == 1:
                     raise
+        assert last_error is not None
         raise last_error

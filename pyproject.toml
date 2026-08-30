@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11", "pytest>=8.3", "ruff>=0.6"]
+dev = ["mypy>=1.11", "pytest>=8.3", "ruff>=0.6", "types-PyYAML>=6.0"]
 
 [project.scripts]
 daily-digest-agent = "daily_digest_agent.main:main"
@@ -43,3 +43,11 @@ select = ["E", "F", "I", "B", "UP"]
 python_version = "3.12"
 strict = true
 packages = ["daily_digest_agent"]
+
+[[tool.mypy.overrides]]
+module = "daily_digest_agent.delivery.gmail"
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = "googleapiclient.*"
+ignore_missing_imports = true

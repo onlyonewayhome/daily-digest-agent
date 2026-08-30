@@ -9,19 +9,22 @@ from zoneinfo import ZoneInfo
 
 from .budgeting import BudgetGuard, estimate_cost
 from .classification.base import ClassifierProvider
-from .config import AppConfig
+from .config import AppConfig, SearchMissionSettings
 from .dedupe import deduplicate_candidates, group_stories_by_key
 from .delivery.base import DeliveryProvider
 from .discovery.base import DiscoveryProvider
 from .exceptions import BudgetExceeded, DiscoveryHealthError, DuplicateDigestError, ProviderOutputError
 from .models import (
+    CandidateStory,
     ClassificationReport,
     Digest,
     DigestContext,
     DiscoveryReport,
+    DiscoveryResult,
     RunResult,
     SourceRecord,
     Story,
+    StoryClassification,
     UsageBearing,
 )
 from .normalize import canonical_story_url
@@ -98,9 +101,12 @@ class DigestPipeline:
             candidates = []
             for mission in self.config.search_missions:
                 try:
+                    def discover(mission: SearchMissionSettings = mission) -> DiscoveryResult:
+                        return self.discovery.discover(mission)
+
                     result = self._paid_call(
                         guard, run_id, "google", self.config.models.discovery.model,
-                        lambda mission=mission: self.discovery.discover(mission), 3,
+                        discover, 3,
                         unsafe_budget_override,
                     )
                     candidates.extend(result.stories)
@@ -124,9 +130,12 @@ class DigestPipeline:
             for candidate in novel:
                 classification_report.attempted += 1
                 try:
+                    def classify(candidate: CandidateStory = candidate) -> StoryClassification:
+                        return self.classifier.classify(candidate)
+
                     classification = self._paid_call(
                         guard, run_id, "google", self.config.models.classification.model,
-                        lambda candidate=candidate: self.classifier.classify(candidate), 3,
+                        classify, 3,
                         unsafe_budget_override,
                     )
                     if classification.category is not None and classification.category not in configured_ids:
