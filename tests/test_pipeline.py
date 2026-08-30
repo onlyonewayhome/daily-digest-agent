@@ -55,6 +55,9 @@ def test_writer_failure_is_recorded(tmp_path, valid_config):
     with pytest.raises(RuntimeError):
         value.run()
     assert store.get_last_run()["status"] == "failed"
+    with store._connect() as db:
+        rows = db.execute("SELECT state FROM budget_reservations ORDER BY created_at").fetchall()
+    assert rows[-1]["state"] == "reserved"
 
 
 def test_delivery_failure_is_recorded(tmp_path, valid_config):

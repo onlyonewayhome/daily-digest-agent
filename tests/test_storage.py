@@ -92,6 +92,17 @@ def test_sqlite_migrates_sent_digests_to_delivery_history(tmp_path):
     assert tuple(row) == ("2026-08-30", 0, "sent", "digest")
 
 
+def test_sqlite_migrates_version_three_to_budget_reservations(tmp_path):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.initialize()
+    with store._connect() as db:
+        db.execute("DROP TABLE budget_reservations")
+        db.execute("UPDATE schema_meta SET version=3")
+    store.initialize()
+    with store._connect() as db:
+        assert db.execute("SELECT COUNT(*) count FROM budget_reservations").fetchone()["count"] == 0
+
+
 def test_d1_usage_queries_and_insert_use_logical_dates():
     store = object.__new__(D1StateStore)
     calls = []

@@ -115,6 +115,7 @@ class UsageSummary(BaseModel):
     provider_calls_today: dict[str, int] = Field(default_factory=dict)
     provider_calls_month: dict[str, int] = Field(default_factory=dict)
     estimated_monthly_cost_usd: float = 0.0
+    reserved_monthly_cost_usd: float = 0.0
 
 
 class RunResult(BaseModel):

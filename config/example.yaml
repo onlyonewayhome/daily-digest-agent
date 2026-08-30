@@ -35,8 +35,8 @@ budget:
   monthly_safety_buffer_usd: 0.25
   allow_unknown_pricing: false
   max_runs_per_day: 1
-  gemini: {max_calls_per_run: 20, max_calls_per_day: 25}
-  openai: {max_calls_per_run: 2, max_calls_per_day: 3, max_output_tokens_per_digest: 5000}
+  gemini: {max_calls_per_run: 20, max_calls_per_day: 25, max_input_tokens_per_request: 20000, max_output_tokens_per_request: 5000}
+  openai: {max_calls_per_run: 2, max_calls_per_day: 3, max_input_tokens_per_request: 50000, max_output_tokens_per_request: 5000, max_output_tokens_per_digest: 5000}
 pricing:
   # Example values only. Verify current provider pricing before every deployment.
   google:

@@ -62,7 +62,7 @@ class DigestPipeline:
         last_error: Exception | None = None
         prices = self.config.pricing.google if provider == "google" else self.config.pricing.openai
         for attempt in range(attempts):
-            guard.check_request(provider, model, unsafe_override)
+            reservation_id = guard.check_request(run_id, provider, model, unsafe_override)
             try:
                 result = operation()
                 usage = result.token_usage
@@ -75,6 +75,8 @@ class DigestPipeline:
                 self.store.record_usage(
                     run_id, guard.local_date, provider, model, usage.input_tokens, usage.output_tokens, cost
                 )
+                if reservation_id is not None:
+                    self.store.reconcile_budget(reservation_id, cost or 0.0)
                 return result
             except Exception as exc:
                 self.store.record_usage(run_id, guard.local_date, provider, model, 0, 0, None)

@@ -56,3 +56,9 @@ def test_invalid_grounding_policy_is_rejected(valid_config):
     valid_config["sources"]["grounding_policy"] = "optional"
     with pytest.raises(ValueError, match="grounding_policy"):
         AppConfig.model_validate(valid_config)
+
+
+def test_provider_token_reservation_limits_are_required(valid_config):
+    del valid_config["budget"]["gemini"]["max_input_tokens_per_request"]
+    with pytest.raises(ValueError, match="max_input_tokens_per_request"):
+        AppConfig.model_validate(valid_config)

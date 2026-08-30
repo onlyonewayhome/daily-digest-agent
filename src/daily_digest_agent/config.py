@@ -100,6 +100,8 @@ class FiltersSettings(StrictConfigModel):
 class ProviderBudgetSettings(StrictConfigModel):
     max_calls_per_run: int = Field(ge=1)
     max_calls_per_day: int = Field(ge=1)
+    max_input_tokens_per_request: int = Field(ge=1)
+    max_output_tokens_per_request: int = Field(ge=1)
     max_output_tokens_per_digest: int | None = Field(default=None, ge=1)
 
 

@@ -119,6 +119,24 @@ def test_usage_accounting_contract(store):
     assert september_usage.estimated_monthly_cost_usd == pytest.approx(0.04)
 
 
+def test_budget_reservation_contract(store):
+    local_date = date(2026, 8, 30)
+    reservation_id = store.reserve_budget("run", local_date, "google", "gemini", 0.40, 1.00)
+    assert reservation_id is not None
+    assert store.get_usage(local_date).reserved_monthly_cost_usd == pytest.approx(0.40)
+
+    second_id = store.reserve_budget("run", local_date, "openai", "writer", 0.50, 1.00)
+    assert second_id is not None
+    assert store.reserve_budget("run", local_date, "google", "gemini", 0.11, 1.00) is None
+
+    store.reconcile_budget(reservation_id, 0.10)
+    usage = store.get_usage(local_date)
+    assert usage.reserved_monthly_cost_usd == pytest.approx(0.50)
+
+    store.record_usage("run", local_date, "google", "gemini", 10, 5, 0.10)
+    assert store.reserve_budget("run", local_date, "google", "gemini", 0.40, 1.00) is not None
+
+
 def test_digest_and_sent_state_contract(store):
     now = datetime(2026, 8, 30, 12, tzinfo=UTC)
     local_date = now.date()

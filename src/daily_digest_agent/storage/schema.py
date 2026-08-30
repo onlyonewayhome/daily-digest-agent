@@ -1,4 +1,4 @@
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_META_SQL = """CREATE TABLE IF NOT EXISTS schema_meta (
   version INTEGER NOT NULL
@@ -89,4 +89,23 @@ DELIVERIES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS deliveries (
 DELIVERY_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_deliveries_date ON deliveries(digest_date)",
     "CREATE INDEX IF NOT EXISTS idx_deliveries_state ON deliveries(state)",
+)
+
+BUDGET_RESERVATIONS_TABLE_SQL = """CREATE TABLE IF NOT EXISTS budget_reservations (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  local_date TEXT NOT NULL,
+  local_month TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  reserved_cost_usd REAL NOT NULL,
+  actual_cost_usd REAL,
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)"""
+
+BUDGET_RESERVATION_INDEX_STATEMENTS = (
+    "CREATE INDEX IF NOT EXISTS idx_budget_reservations_month ON budget_reservations(local_month)",
+    "CREATE INDEX IF NOT EXISTS idx_budget_reservations_state ON budget_reservations(state)",
 )

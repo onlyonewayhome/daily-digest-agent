@@ -10,6 +10,8 @@ from ..exceptions import DeliveryStateError, StorageSchemaError
 from ..models import Digest, SourceRecord, Story, UsageSummary
 from .schema import (
     BASE_SCHEMA_STATEMENTS,
+    BUDGET_RESERVATION_INDEX_STATEMENTS,
+    BUDGET_RESERVATIONS_TABLE_SQL,
     DELIVERIES_TABLE_SQL,
     DELIVERY_INDEX_STATEMENTS,
     SCHEMA_META_SQL,
@@ -63,6 +65,12 @@ class SQLiteStateStore:
                 ) SELECT id,digest_date,0,run_id,id,'sent',generated_at,COALESCE(sent_at,generated_at),NULL
                   FROM digests WHERE sent_at IS NOT NULL""")
                 self._set_schema_version(db, 3)
+                version = 3
+            if version < 4:
+                db.execute(BUDGET_RESERVATIONS_TABLE_SQL)
+                for statement in BUDGET_RESERVATION_INDEX_STATEMENTS:
+                    db.execute(statement)
+                self._set_schema_version(db, 4)
 
     @staticmethod
     def _set_schema_version(db: sqlite3.Connection, version: int) -> None:
@@ -141,9 +149,49 @@ class SQLiteStateStore:
                 "SELECT COALESCE(SUM(estimated_cost_usd),0) cost FROM usage WHERE local_month=?",
                 (month,),
             ).fetchone()
+            reserved = db.execute(
+                """SELECT COALESCE(SUM(reserved_cost_usd),0) cost FROM budget_reservations
+                WHERE local_month=? AND state='reserved'""",
+                (month,),
+            ).fetchone()
         return UsageSummary(provider_calls_today={row["provider"]: row["count"] for row in daily},
                             provider_calls_month={row["provider"]: row["count"] for row in monthly},
-                            estimated_monthly_cost_usd=float(cost["cost"]))
+                            estimated_monthly_cost_usd=float(cost["cost"]),
+                            reserved_monthly_cost_usd=float(reserved["cost"]))
+
+    def reserve_budget(self, run_id: str, local_date: date, provider: str, model: str,
+                       reserved_cost_usd: float, monthly_limit_usd: float) -> str | None:
+        reservation_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
+        month = local_date.strftime("%Y-%m")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            usage = db.execute(
+                "SELECT COALESCE(SUM(estimated_cost_usd),0) cost FROM usage WHERE local_month=?",
+                (month,),
+            ).fetchone()
+            reserved = db.execute(
+                """SELECT COALESCE(SUM(reserved_cost_usd),0) cost FROM budget_reservations
+                WHERE local_month=? AND state='reserved'""",
+                (month,),
+            ).fetchone()
+            if float(usage["cost"]) + float(reserved["cost"]) + reserved_cost_usd > monthly_limit_usd:
+                return None
+            db.execute(
+                """INSERT INTO budget_reservations(
+                id,run_id,local_date,local_month,provider,model,reserved_cost_usd,state,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (reservation_id, run_id, local_date.isoformat(), month, provider, model,
+                 reserved_cost_usd, "reserved", now, now),
+            )
+        return reservation_id
+
+    def reconcile_budget(self, reservation_id: str, actual_cost_usd: float) -> None:
+        with self._connect() as db:
+            db.execute(
+                """UPDATE budget_reservations SET actual_cost_usd=?,state='reconciled',updated_at=? WHERE id=?""",
+                (actual_cost_usd, datetime.now(UTC).isoformat(), reservation_id),
+            )
 
     def record_usage(self, run_id: str, local_date: date, provider: str, model: str, input_tokens: int,
                      output_tokens: int, estimated_cost_usd: float | None) -> None:

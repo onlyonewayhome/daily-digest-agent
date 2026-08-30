@@ -124,7 +124,10 @@ running application.
 Model pricing is user-maintained configuration because vendor prices change. Missing pricing blocks
 paid requests by default. `allow_unknown_pricing: true` permits calls under request-count limits but
 logs that dollar accounting is incomplete. The monthly safety buffer stops new calls conservatively
-before the cap. Provider-side billing remains authoritative.
+before the cap. For priced models, each request reserves its configured maximum input/output cost
+before execution and reconciles successful calls to actual token usage. Failed or ambiguous calls keep
+their reservation, preventing concurrent or retrying workers from overspending the application
+threshold. Provider-side billing remains authoritative.
 
 ## Failure and security model
 

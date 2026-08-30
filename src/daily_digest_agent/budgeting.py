@@ -24,7 +24,7 @@ class BudgetGuard:
             raise DailyRunLimitExceeded("Maximum successful runs for this local date has been reached")
         self._check_monthly(self.store.get_usage(self.local_date))
 
-    def check_request(self, provider: str, model: str, unsafe_override: bool = False) -> None:
+    def check_request(self, run_id: str, provider: str, model: str, unsafe_override: bool = False) -> str | None:
         usage = self.store.get_usage(self.local_date)
         settings = self.config.budget.gemini if provider == "google" else self.config.budget.openai
         calls = self.run_calls.get(provider, 0)
@@ -32,6 +32,7 @@ class BudgetGuard:
             raise ProviderBudgetExceeded(f"{provider} per-run call limit reached")
         if not unsafe_override and usage.provider_calls_today.get(provider, 0) >= settings.max_calls_per_day:
             raise ProviderBudgetExceeded(f"{provider} daily call limit reached")
+        reservation_id: str | None = None
         if not unsafe_override:
             self._check_monthly(usage)
             prices = self.config.pricing.google if provider == "google" else self.config.pricing.openai
@@ -42,11 +43,24 @@ class BudgetGuard:
                         f"No pricing is configured for provider/model {provider}/{model}. "
                         "Refusing paid request because allow_unknown_pricing is false."
                     )
+            else:
+                output_limit = settings.max_output_tokens_per_digest or settings.max_output_tokens_per_request
+                reserved_cost = estimate_cost(price, settings.max_input_tokens_per_request, output_limit)
+                assert reserved_cost is not None
+                threshold = self.config.budget.monthly_usd_cap - self.config.budget.monthly_safety_buffer_usd
+                reservation_id = self.store.reserve_budget(
+                    run_id, self.local_date, provider, model, reserved_cost, threshold
+                )
+                if reservation_id is None:
+                    raise MonthlyBudgetExceeded(
+                        "Request maximum cost would exceed the configured monthly safety threshold"
+                    )
         self.run_calls[provider] = calls + 1
+        return reservation_id
 
     def _check_monthly(self, usage: UsageSummary) -> None:
         threshold = self.config.budget.monthly_usd_cap - self.config.budget.monthly_safety_buffer_usd
-        if usage.estimated_monthly_cost_usd >= threshold:
+        if usage.estimated_monthly_cost_usd + usage.reserved_monthly_cost_usd >= threshold:
             raise MonthlyBudgetExceeded("Configured monthly estimated cost cap safety threshold has been reached")
 
 

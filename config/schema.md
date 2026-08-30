@@ -15,6 +15,9 @@ Filter importance is `0..5`; relevance is `0..1`. Budget limits are hard applica
 by the deployment owner because vendor prices change. Missing or incomplete pricing blocks paid
 requests unless `allow_unknown_pricing` is explicitly enabled; in that mode call limits still apply,
 but dollar accounting is incomplete. Never place secrets in YAML.
+Each provider budget requires maximum input and output token counts per request. Before a priced call,
+the application reserves that maximum cost against the monthly safety threshold and reconciles a
+successful call to actual usage. Failed or ambiguous calls retain their conservative reservation.
 
 Operational timestamps are UTC. Usage rows separately store the configured digest-local date and
 month used for daily and monthly accounting. Storage uses forward-only numbered migrations. Fresh and
@@ -23,3 +26,4 @@ the logical usage date and month fields. Startup refuses a database whose schema
 the application supports instead of silently overwriting its metadata.
 Version 3 adds delivery attempts with a unique date/attempt reservation and explicit `pending`,
 `sending`, `sent`, `failed`, and `unknown` states. Previously sent digests are migrated as attempt 0.
+Version 4 adds persistent request-cost reservations and reconciliation state.
