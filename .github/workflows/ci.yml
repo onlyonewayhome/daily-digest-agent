@@ -1,12 +1,119 @@
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+
 jobs:
-  test:
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: "3.12", cache: pip}
+        with:
+          python-version: "3.12"
+          cache: pip
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
-      - run: pytest
+
+  config:
+    name: Config & normalization
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q tests/test_config.py tests/test_normalize.py
+
+  budget:
+    name: Budget safeguards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q tests/test_budgeting.py
+
+  discovery:
+    name: Discovery & provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q tests/test_discovery_gemini.py
+
+  storage:
+    name: Storage & migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q tests/test_storage.py
+
+  retry:
+    name: Retry behavior
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q tests/test_retry.py
+
+  pipeline:
+    name: Pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q tests/test_pipeline.py
+
+  persistent-dedupe:
+    name: Persistent deduplication
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: |
+          pytest -q \
+            tests/test_pipeline.py::test_persisted_story_is_not_reclassified_on_second_run \
+            tests/test_pipeline.py::test_grounded_canonical_story_is_not_reclassified_on_second_run \
+            tests/test_pipeline.py::test_new_story_on_second_run_is_still_classified
+
+  package:
+    name: Package & compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: python -m compileall -q src
+      - run: daily-digest-agent validate-config --config config/example.yaml
