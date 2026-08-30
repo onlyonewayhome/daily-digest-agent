@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from ..config import AppConfig
 from ..exceptions import ProviderOutputError
 from ..models import Digest, DigestContext, Story, TokenUsage
+from .html import sanitize_email_html
 
 
 class DigestPayload(BaseModel):
@@ -61,11 +62,12 @@ Return JSON with exactly: subject, plain_text, html."""
         unexpected = rendered_urls - allowed_urls
         if unexpected:
             raise ProviderOutputError(f"Writer returned URLs outside the verified source set: {sorted(unexpected)}")
+        sanitized_html = sanitize_email_html(payload.html, allowed_urls)
         return Digest(
             digest_date=context.digest_date,
             subject=payload.subject,
             plain_text=payload.plain_text,
-            html=payload.html,
+            html=sanitized_html,
             generated_at=datetime.now(UTC),
             token_usage=TokenUsage(
                 input_tokens=getattr(response.usage, "input_tokens", 0) or 0,

@@ -81,3 +81,21 @@ def test_writer_rejects_unverified_url(valid_config):
 
     with pytest.raises(ProviderOutputError, match="outside the verified source set"):
         writer(valid_config, payload).generate_digest([story()], context())
+
+
+def test_writer_sanitizes_html_before_returning_digest(valid_config):
+    payload = json.dumps({
+        "subject": "Digest",
+        "plain_text": "Read https://example.com/story",
+        "html": (
+            '<p onclick="steal()" style="color:red">Read '
+            '<a href="https://example.com/story" target="_blank">source</a>.</p>'
+            '<script>alert("secret")</script>'
+        ),
+    })
+
+    result = writer(valid_config, payload).generate_digest([story()], context())
+
+    assert result.html == (
+        '<p>Read <a href="https://example.com/story" rel="noopener noreferrer">source</a>.</p>'
+    )

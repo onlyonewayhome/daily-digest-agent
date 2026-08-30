@@ -75,7 +75,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: pytest -q tests/test_classification_gemini.py tests/test_writer_openai.py tests/test_delivery_gmail.py
+      - run: pytest -q tests/test_classification_gemini.py tests/test_writer_openai.py tests/test_writer_html.py tests/test_delivery_gmail.py
 
   storage:
     name: Storage & migrations

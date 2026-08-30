@@ -136,7 +136,9 @@ model-emitted URL when no matching grounding record exists, while reporting grou
 candidate counts. `sources.grounding_policy: require` rejects ungrounded candidates before
 classification and is recommended when every published URL must be directly grounded. The writer
 receives only application-provided source URLs, is instructed to preserve them exactly, and rejects
-unexpected external URLs in generated output.
+unexpected external URLs in generated output. Generated HTML is parsed through an allowlist sanitizer
+before storage or delivery: active content, arbitrary attributes, and inline CSS are removed, while
+links must be exact verified HTTPS source URLs.
 
 ## Production deployment
 
