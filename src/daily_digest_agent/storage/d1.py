@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import UTC, date, datetime
 from typing import Any
@@ -19,6 +20,8 @@ from .schema import (
     SCHEMA_VERSION,
     USAGE_DATE_INDEX_STATEMENTS,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class D1StateStore:
@@ -156,8 +159,11 @@ class D1StateStore:
             [month],
         )
         costs = self._query(
-            "SELECT COALESCE(SUM(estimated_cost_usd),0) cost FROM usage WHERE local_month=?",
-            [month],
+            """SELECT
+            COALESCE((SELECT SUM(estimated_cost_usd) FROM usage WHERE local_month=?),0)
+            + COALESCE((SELECT SUM(actual_cost_usd) FROM budget_reservations
+                        WHERE local_month=? AND state='reconciled'),0) cost""",
+            [month, month],
         )
         reserved = self._query(
             """SELECT COALESCE(SUM(reserved_cost_usd),0) cost FROM budget_reservations
@@ -181,19 +187,23 @@ class D1StateStore:
             id,run_id,local_date,local_month,provider,model,reserved_cost_usd,state,created_at,updated_at
             ) SELECT ?,?,?,?,?,?,?,?, ?,?
             WHERE COALESCE((SELECT SUM(estimated_cost_usd) FROM usage WHERE local_month=?),0)
+                + COALESCE((SELECT SUM(actual_cost_usd) FROM budget_reservations
+                            WHERE local_month=? AND state='reconciled'),0)
                 + COALESCE((SELECT SUM(reserved_cost_usd) FROM budget_reservations
                             WHERE local_month=? AND state='reserved'),0) + ? <= ?""",
             [reservation_id, run_id, local_date.isoformat(), month, provider, model,
-             reserved_cost_usd, "reserved", now, now, month, month, reserved_cost_usd, monthly_limit_usd],
+             reserved_cost_usd, "reserved", now, now, month, month, month, reserved_cost_usd, monthly_limit_usd],
         )
         return reservation_id if self._query(
             "SELECT 1 FROM budget_reservations WHERE id=?", [reservation_id]
         ) else None
 
-    def reconcile_budget(self, reservation_id: str, actual_cost_usd: float) -> None:
+    def record_usage_and_reconcile(self, reservation_id: str, run_id: str, local_date: date,
+                                   provider: str, model: str, input_tokens: int, output_tokens: int,
+                                   estimated_cost_usd: float) -> None:
         self._query(
             """UPDATE budget_reservations SET actual_cost_usd=?,state='reconciled',updated_at=? WHERE id=?""",
-            [actual_cost_usd, datetime.now(UTC).isoformat(), reservation_id],
+            [estimated_cost_usd, datetime.now(UTC).isoformat(), reservation_id],
         )
 
     def record_usage(self, run_id: str, local_date: date, provider: str, model: str, input_tokens: int,
@@ -213,11 +223,21 @@ class D1StateStore:
              digest.html, json.dumps(digest.included_story_ids), digest.generated_at.isoformat(), None],
         )
         for story_id in digest.included_story_ids:
-            self._query(
-                "UPDATE stories SET included_in_digest=1,digest_id=? WHERE id=?",
-                [digest_id, story_id],
-            )
+            try:
+                self._query(
+                    "UPDATE stories SET included_in_digest=1,digest_id=? WHERE id=?",
+                    [digest_id, story_id],
+                )
+            except Exception:
+                logger.exception(
+                    "Digest recorded but story denormalization failed",
+                    extra={"digest_id": digest_id, "story_id": story_id},
+                )
         return digest_id
+
+    def get_digest_story_ids(self, digest_id: str) -> list[str]:
+        rows = self._query("SELECT story_ids_json FROM digests WHERE id=?", [digest_id])
+        return [str(value) for value in json.loads(rows[0]["story_ids_json"])] if rows else []
 
     def reserve_delivery(self, digest_date: date, run_id: str, force: bool = False) -> str | None:
         delivery_id = str(uuid.uuid4())
@@ -257,9 +277,15 @@ class D1StateStore:
     def mark_digest_sent(self, digest_id: str, sent_at: datetime) -> None:
         self._query("UPDATE digests SET sent_at=? WHERE id=?", [sent_at.isoformat(), digest_id])
 
+    def complete_delivery(self, delivery_id: str, digest_id: str, sent_at: datetime) -> None:
+        self._query(
+            """UPDATE deliveries SET state='sent',digest_id=?,updated_at=?,error=NULL WHERE id=?""",
+            [digest_id, sent_at.isoformat(), delivery_id],
+        )
+
     def digest_sent_for_date(self, digest_date: date) -> bool:
         return bool(self._query(
-            "SELECT 1 FROM digests WHERE digest_date=? AND sent_at IS NOT NULL",
+            "SELECT 1 FROM deliveries WHERE digest_date=? AND state='sent'",
             [digest_date.isoformat()],
         ))
 

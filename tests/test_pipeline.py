@@ -29,6 +29,11 @@ def test_successful_normal_run(tmp_path, valid_config):
     value, _ = pipeline(tmp_path, valid_config, results={"general": [candidate()]})
     result = value.run(dry_run=True)
     assert result.status == "success" and result.accepted_stories == 1
+    with value.store._connect() as db:
+        reconciled = db.execute(
+            "SELECT COUNT(*) count FROM budget_reservations WHERE state='reconciled'"
+        ).fetchone()["count"]
+    assert reconciled == 4
 
 
 def test_quiet_day(tmp_path, valid_config):
@@ -205,11 +210,12 @@ def test_empty_discovery_records_request_usage_and_cost(tmp_path, valid_config):
     value.run(dry_run=True)
     with store._connect() as db:
         row = db.execute(
-            "SELECT input_tokens,output_tokens,estimated_cost_usd FROM usage ORDER BY id LIMIT 1"
+            """SELECT actual_cost_usd,state FROM budget_reservations
+            WHERE model=? ORDER BY created_at LIMIT 1""",
+            (value.config.models.discovery.model,),
         ).fetchone()
-    assert row["input_tokens"] == 100
-    assert row["output_tokens"] == 20
-    assert row["estimated_cost_usd"] > 0
+    assert row["state"] == "reconciled"
+    assert row["actual_cost_usd"] > 0
 
 
 def test_unknown_pricing_blocks_provider_execution(tmp_path, valid_config):
@@ -318,10 +324,13 @@ def test_unknown_category_rejects_candidate_and_run_continues(tmp_path, valid_co
     assert "Candidate A" not in result.digest.plain_text
     with store._connect() as db:
         classification_usage = db.execute(
-            "SELECT input_tokens,output_tokens FROM usage WHERE model=? ORDER BY id",
+            """SELECT actual_cost_usd,state FROM budget_reservations
+            WHERE model=? ORDER BY created_at""",
             (value.config.models.classification.model,),
         ).fetchall()
-    assert [(row["input_tokens"], row["output_tokens"]) for row in classification_usage] == [(30, 10), (25, 8)]
+    expected_costs = [40 / 1_000_000, 33 / 1_000_000]
+    assert [row["state"] for row in classification_usage] == ["reconciled", "reconciled"]
+    assert [row["actual_cost_usd"] for row in classification_usage] == pytest.approx(expected_costs)
 
 
 def test_classifier_provider_output_error_records_usage_and_continues(tmp_path, valid_config):
@@ -338,12 +347,19 @@ def test_classifier_provider_output_error_records_usage_and_continues(tmp_path, 
     assert result.accepted_stories == 1
     assert result.classification.invalid_output == 1
     with store._connect() as db:
-        usage_rows = db.execute(
+        failed_usage = db.execute(
             "SELECT input_tokens,output_tokens FROM usage WHERE model=? ORDER BY id",
             (value.config.models.classification.model,),
         ).fetchall()
-    assert len(usage_rows) == 2
-    assert (usage_rows[0]["input_tokens"], usage_rows[0]["output_tokens"]) == (0, 0)
+        reservations = db.execute(
+            "SELECT state,actual_cost_usd FROM budget_reservations WHERE model=? ORDER BY created_at",
+            (value.config.models.classification.model,),
+        ).fetchall()
+    assert len(failed_usage) == 1
+    assert (failed_usage[0]["input_tokens"], failed_usage[0]["output_tokens"]) == (0, 0)
+    assert [row["state"] for row in reservations] == ["reserved", "reconciled"]
+    assert reservations[0]["actual_cost_usd"] is None
+    assert reservations[1]["actual_cost_usd"] == 0.0
 
 
 def test_classifier_provider_failure_is_not_treated_as_candidate_rejection(tmp_path, valid_config):

@@ -146,8 +146,11 @@ class SQLiteStateStore:
                 (month,),
             ).fetchall()
             cost = db.execute(
-                "SELECT COALESCE(SUM(estimated_cost_usd),0) cost FROM usage WHERE local_month=?",
-                (month,),
+                """SELECT
+                COALESCE((SELECT SUM(estimated_cost_usd) FROM usage WHERE local_month=?),0)
+                + COALESCE((SELECT SUM(actual_cost_usd) FROM budget_reservations
+                            WHERE local_month=? AND state='reconciled'),0) cost""",
+                (month, month),
             ).fetchone()
             reserved = db.execute(
                 """SELECT COALESCE(SUM(reserved_cost_usd),0) cost FROM budget_reservations
@@ -167,8 +170,11 @@ class SQLiteStateStore:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             usage = db.execute(
-                "SELECT COALESCE(SUM(estimated_cost_usd),0) cost FROM usage WHERE local_month=?",
-                (month,),
+                """SELECT
+                COALESCE((SELECT SUM(estimated_cost_usd) FROM usage WHERE local_month=?),0)
+                + COALESCE((SELECT SUM(actual_cost_usd) FROM budget_reservations
+                            WHERE local_month=? AND state='reconciled'),0) cost""",
+                (month, month),
             ).fetchone()
             reserved = db.execute(
                 """SELECT COALESCE(SUM(reserved_cost_usd),0) cost FROM budget_reservations
@@ -186,11 +192,14 @@ class SQLiteStateStore:
             )
         return reservation_id
 
-    def reconcile_budget(self, reservation_id: str, actual_cost_usd: float) -> None:
+    def record_usage_and_reconcile(self, reservation_id: str, run_id: str, local_date: date,
+                                   provider: str, model: str, input_tokens: int, output_tokens: int,
+                                   estimated_cost_usd: float) -> None:
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 """UPDATE budget_reservations SET actual_cost_usd=?,state='reconciled',updated_at=? WHERE id=?""",
-                (actual_cost_usd, datetime.now(UTC).isoformat(), reservation_id),
+                (estimated_cost_usd, datetime.now(UTC).isoformat(), reservation_id),
             )
 
     def record_usage(self, run_id: str, local_date: date, provider: str, model: str, input_tokens: int,
@@ -213,6 +222,11 @@ class SQLiteStateStore:
                 db.executemany("UPDATE stories SET included_in_digest=1,digest_id=? WHERE id=?",
                                [(digest_id, story_id) for story_id in digest.included_story_ids])
         return digest_id
+
+    def get_digest_story_ids(self, digest_id: str) -> list[str]:
+        with self._connect() as db:
+            row = db.execute("SELECT story_ids_json FROM digests WHERE id=?", (digest_id,)).fetchone()
+        return [str(value) for value in json.loads(row["story_ids_json"])] if row else []
 
     def reserve_delivery(self, digest_date: date, run_id: str, force: bool = False) -> str | None:
         delivery_id = str(uuid.uuid4())
@@ -257,9 +271,18 @@ class SQLiteStateStore:
         with self._connect() as db:
             db.execute("UPDATE digests SET sent_at=? WHERE id=?", (sent_at.isoformat(), digest_id))
 
+    def complete_delivery(self, delivery_id: str, digest_id: str, sent_at: datetime) -> None:
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("UPDATE digests SET sent_at=? WHERE id=?", (sent_at.isoformat(), digest_id))
+            db.execute(
+                """UPDATE deliveries SET state='sent',digest_id=?,updated_at=?,error=NULL WHERE id=?""",
+                (digest_id, sent_at.isoformat(), delivery_id),
+            )
+
     def digest_sent_for_date(self, digest_date: date) -> bool:
         with self._connect() as db:
-            return db.execute("SELECT 1 FROM digests WHERE digest_date=? AND sent_at IS NOT NULL",
+            return db.execute("SELECT 1 FROM deliveries WHERE digest_date=? AND state='sent'",
                               (digest_date.isoformat(),)).fetchone() is not None
 
     def get_last_run(self) -> dict[str, object] | None:

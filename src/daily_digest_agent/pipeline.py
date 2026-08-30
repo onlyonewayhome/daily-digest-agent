@@ -72,11 +72,15 @@ class DigestPipeline:
                         "Paid request cost is unknown; dollar budget accounting is incomplete",
                         extra={"provider": provider, "model": model, "run_id": run_id},
                     )
-                self.store.record_usage(
-                    run_id, guard.local_date, provider, model, usage.input_tokens, usage.output_tokens, cost
-                )
                 if reservation_id is not None:
-                    self.store.reconcile_budget(reservation_id, cost or 0.0)
+                    self.store.record_usage_and_reconcile(
+                        reservation_id, run_id, guard.local_date, provider, model,
+                        usage.input_tokens, usage.output_tokens, cost or 0.0,
+                    )
+                else:
+                    self.store.record_usage(
+                        run_id, guard.local_date, provider, model, usage.input_tokens, usage.output_tokens, cost
+                    )
                 return result
             except Exception as exc:
                 self.store.record_usage(run_id, guard.local_date, provider, model, 0, 0, None)
@@ -214,8 +218,7 @@ class DigestPipeline:
                     self.store.update_delivery(delivery_id, "unknown", digest_id=digest_id, error=str(exc))
                     raise
                 sent_at = datetime.now(UTC)
-                self.store.mark_digest_sent(digest_id, sent_at)
-                self.store.update_delivery(delivery_id, "sent", digest_id=digest_id)
+                self.store.complete_delivery(delivery_id, digest_id, sent_at)
                 digest.sent_at = sent_at
             self.store.record_run_finish(run_id, "success")
             return RunResult(run_id=run_id, status="success", discovery=report,

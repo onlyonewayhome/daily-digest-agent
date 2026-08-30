@@ -133,6 +133,12 @@ SQLite performs budget reservations under `BEGIN IMMEDIATE`. D1 uses a single co
 `INSERT ... SELECT ... WHERE` statement so its aggregate budget check and reservation are evaluated by
 the database as one write operation. The REST API does not expose the Workers Binding API's
 transactional `batch()` primitive, so cross-statement atomic operations are intentionally avoided.
+Successful priced calls are accounted from the reconciled reservation ledger, allowing D1 to record
+actual cost with one authoritative update. Delivery completion likewise uses the delivery attempt as
+the authoritative sent-state row; SQLite updates its legacy digest timestamp in the same transaction.
+Digest rows are authoritative for included story IDs. SQLite updates denormalized story flags in the
+same transaction; D1 treats those flags as best-effort indexes so a secondary update failure cannot
+erase or invalidate an already-recorded digest.
 
 ## Failure and security model
 

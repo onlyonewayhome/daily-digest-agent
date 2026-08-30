@@ -142,11 +142,12 @@ def test_budget_reservation_contract(store):
     assert second_id is not None
     assert store.reserve_budget("run", local_date, "google", "gemini", 0.11, 1.00) is None
 
-    store.reconcile_budget(reservation_id, 0.10)
+    store.record_usage_and_reconcile(
+        reservation_id, "run", local_date, "google", "gemini", 10, 5, 0.10
+    )
     usage = store.get_usage(local_date)
     assert usage.reserved_monthly_cost_usd == pytest.approx(0.50)
-
-    store.record_usage("run", local_date, "google", "gemini", 10, 5, 0.10)
+    assert usage.estimated_monthly_cost_usd == pytest.approx(0.10)
     assert store.reserve_budget("run", local_date, "google", "gemini", 0.40, 1.00) is not None
 
 
@@ -186,6 +187,26 @@ def test_d1_conditional_budget_insert_observes_competing_reservation():
     assert store.reserve_budget("run", local_date, "google", "gemini", 0.40, 1.00) is None
 
 
+def test_d1_reconciliation_is_one_authoritative_write():
+    store = SQLiteBackedD1Store()
+    store.initialize()
+    reservation_id = store.reserve_budget("run", date(2026, 8, 30), "google", "gemini", 0.40, 1.00)
+    assert reservation_id is not None
+    calls = []
+    original = store._query
+
+    def query(sql, params=None):
+        calls.append(sql)
+        return original(sql, params)
+
+    store._query = query
+    store.record_usage_and_reconcile(
+        reservation_id, "run", date(2026, 8, 30), "google", "gemini", 10, 5, 0.10
+    )
+    assert len(calls) == 1
+    assert calls[0].lstrip().startswith("UPDATE budget_reservations")
+
+
 def test_digest_and_sent_state_contract(store):
     now = datetime(2026, 8, 30, 12, tzinfo=UTC)
     local_date = now.date()
@@ -203,12 +224,16 @@ def test_digest_and_sent_state_contract(store):
     assert not store.digest_sent_for_date(local_date)
     digest_id = store.record_digest(digest, run_id)
     assert not store.digest_sent_for_date(local_date)
+    assert store.get_digest_story_ids(digest_id) == [story_id]
 
     story = store.get_recent_stories(now - timedelta(seconds=1))[0]
     assert story.included_in_digest
     assert story.digest_id == digest_id
 
-    store.mark_digest_sent(digest_id, now + timedelta(minutes=1))
+    delivery_id = store.reserve_delivery(local_date, run_id)
+    assert delivery_id is not None
+    store.update_delivery(delivery_id, "sending", digest_id=digest_id)
+    store.complete_delivery(delivery_id, digest_id, now + timedelta(minutes=1))
     assert store.digest_sent_for_date(local_date)
     assert not store.digest_sent_for_date(local_date + timedelta(days=1))
 
@@ -237,3 +262,53 @@ def test_delivery_reservation_contract(store):
     assert forced["attempt"] == 2
     store.update_delivery(forced_id, "sent", digest_id="digest-id-2")
     assert store.get_delivery(forced_id)["state"] == "sent"
+
+
+def test_d1_delivery_completion_is_one_authoritative_write():
+    store = SQLiteBackedD1Store()
+    store.initialize()
+    local_date = date(2026, 8, 30)
+    run_id = store.record_run_start(local_date, forced=False)
+    delivery_id = store.reserve_delivery(local_date, run_id)
+    assert delivery_id is not None
+    calls = []
+    original = store._query
+
+    def query(sql, params=None):
+        calls.append(sql)
+        return original(sql, params)
+
+    store._query = query
+    store.complete_delivery(delivery_id, "digest-id", datetime(2026, 8, 30, 12, tzinfo=UTC))
+    assert len(calls) == 1
+    assert calls[0].lstrip().startswith("UPDATE deliveries SET state='sent'")
+
+
+def test_d1_digest_row_survives_story_denormalization_failure():
+    store = SQLiteBackedD1Store()
+    store.initialize()
+    now = datetime(2026, 8, 30, 12, tzinfo=UTC)
+    story_id = store.upsert_story(sample_story(now))
+    run_id = store.record_run_start(now.date(), forced=False)
+    digest = Digest(
+        digest_date=now.date(),
+        subject="Example Daily",
+        plain_text="Plain body",
+        html="<p>HTML body</p>",
+        included_story_ids=[story_id],
+        generated_at=now,
+    )
+    original = store._query
+
+    def query(sql, params=None):
+        if sql.startswith("UPDATE stories SET included_in_digest"):
+            raise RuntimeError("simulated story update failure")
+        return original(sql, params)
+
+    store._query = query
+    digest_id = store.record_digest(digest, run_id)
+
+    assert store.get_digest_story_ids(digest_id) == [story_id]
+    stored_story = store.get_recent_stories(now - timedelta(seconds=1))[0]
+    assert not stored_story.included_in_digest
+    assert stored_story.digest_id is None

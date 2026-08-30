@@ -29,3 +29,7 @@ Version 3 adds delivery attempts with a unique date/attempt reservation and expl
 Version 4 adds persistent request-cost reservations and reconciliation state.
 SQLite reserves under an immediate write transaction. D1 uses single-statement conditional inserts;
 the REST API does not expose the Workers Binding API's transactional batch method.
+Reconciled reservation rows are authoritative for priced-call actual cost, and delivery rows are
+authoritative for sent state. This avoids cross-table atomicity requirements on D1 REST.
+`digests.story_ids_json` is authoritative for digest membership. Story-level digest flags are
+transactional in SQLite and best-effort denormalized indexes in D1.
