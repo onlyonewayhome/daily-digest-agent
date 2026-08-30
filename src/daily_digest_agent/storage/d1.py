@@ -99,7 +99,7 @@ class D1StateStore:
 
     def _story(self, row: dict[str, Any]) -> Story:
         return Story(
-            **{key: value for key, value in row.items() if key not in {"sources_json"}},
+            **{key: value for key, value in row.items() if key not in {"included_in_digest", "sources_json"}},
             sources=[SourceRecord.model_validate(value) for value in json.loads(row["sources_json"])],
             included_in_digest=bool(row["included_in_digest"]),
         )

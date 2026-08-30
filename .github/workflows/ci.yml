@@ -87,7 +87,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: pytest -q tests/test_storage.py
+      - run: pytest -q tests/test_storage.py tests/test_storage_contract.py
 
   retry:
     name: Retry behavior
