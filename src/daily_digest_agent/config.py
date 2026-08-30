@@ -6,12 +6,16 @@ from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .exceptions import ConfigurationError
 
 
-class DigestSettings(BaseModel):
+class StrictConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DigestSettings(StrictConfigModel):
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
     timezone: str
@@ -31,36 +35,36 @@ class DigestSettings(BaseModel):
         return self
 
 
-class TopicSettings(BaseModel):
+class TopicSettings(StrictConfigModel):
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
     include_terms: list[str] = Field(default_factory=list)
     exclude_terms: list[str] = Field(default_factory=list)
 
 
-class CategorySettings(BaseModel):
+class CategorySettings(StrictConfigModel):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     name: str
     weight: int = Field(default=1, ge=0)
 
 
-class SearchMissionSettings(BaseModel):
+class SearchMissionSettings(StrictConfigModel):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     prompt: str = Field(min_length=1)
 
 
-class SourcesSettings(BaseModel):
+class SourcesSettings(StrictConfigModel):
     preferred_domains: list[str] = Field(default_factory=list)
     ignored_domains: list[str] = Field(default_factory=list)
 
 
-class ModelProviderSettings(BaseModel):
+class ModelProviderSettings(StrictConfigModel):
     provider: Literal["google", "openai"]
     model: str
     grounding: Literal["google_search"] | None = None
 
 
-class ModelsSettings(BaseModel):
+class ModelsSettings(StrictConfigModel):
     discovery: ModelProviderSettings
     classification: ModelProviderSettings
     writer: ModelProviderSettings
@@ -76,29 +80,29 @@ class ModelsSettings(BaseModel):
         return self
 
 
-class StorageSettings(BaseModel):
+class StorageSettings(StrictConfigModel):
     provider: Literal["sqlite", "d1"] = "sqlite"
     sqlite_path: str = "./data/digest.db"
 
 
-class DeliverySettings(BaseModel):
+class DeliverySettings(StrictConfigModel):
     provider: Literal["console", "gmail"] = "console"
     save_html_path: str | None = "./output"
 
 
-class FiltersSettings(BaseModel):
+class FiltersSettings(StrictConfigModel):
     minimum_importance: int = Field(default=3, ge=0, le=5)
     minimum_relevance: float = Field(default=0.6, ge=0, le=1)
     maximum_stories_per_digest: int = Field(default=15, ge=1, le=100)
 
 
-class ProviderBudgetSettings(BaseModel):
+class ProviderBudgetSettings(StrictConfigModel):
     max_calls_per_run: int = Field(ge=1)
     max_calls_per_day: int = Field(ge=1)
     max_output_tokens_per_digest: int | None = Field(default=None, ge=1)
 
 
-class BudgetSettings(BaseModel):
+class BudgetSettings(StrictConfigModel):
     monthly_usd_cap: float = Field(default=3.0, gt=0)
     monthly_safety_buffer_usd: float = Field(default=0.25, ge=0)
     allow_unknown_pricing: bool = False
@@ -113,21 +117,21 @@ class BudgetSettings(BaseModel):
         return self
 
 
-class ModelPrice(BaseModel):
+class ModelPrice(StrictConfigModel):
     input_per_million: float | None = Field(default=None, ge=0)
     output_per_million: float | None = Field(default=None, ge=0)
 
 
-class PricingSettings(BaseModel):
+class PricingSettings(StrictConfigModel):
     google: dict[str, ModelPrice] = Field(default_factory=dict)
     openai: dict[str, ModelPrice] = Field(default_factory=dict)
 
 
-class HealthSettings(BaseModel):
+class HealthSettings(StrictConfigModel):
     minimum_search_success_ratio: float = Field(default=0.75, gt=0, le=1)
 
 
-class AppConfig(BaseModel):
+class AppConfig(StrictConfigModel):
     digest: DigestSettings
     topic: TopicSettings
     categories: list[CategorySettings] = Field(min_length=1)

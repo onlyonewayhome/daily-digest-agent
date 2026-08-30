@@ -33,3 +33,15 @@ def test_budget_safety_buffer_must_be_less_than_cap(valid_config):
     valid_config["budget"]["monthly_safety_buffer_usd"] = 3.0
     with pytest.raises(ValueError):
         AppConfig.model_validate(valid_config)
+
+
+def test_unknown_top_level_setting_is_rejected(valid_config):
+    valid_config["budegt"] = {"monthly_usd_cap": 99.0}
+    with pytest.raises(ValueError, match="budegt"):
+        AppConfig.model_validate(valid_config)
+
+
+def test_unknown_nested_setting_is_rejected(valid_config):
+    valid_config["budget"]["max_runs_per_dya"] = 99
+    with pytest.raises(ValueError, match="max_runs_per_dya"):
+        AppConfig.model_validate(valid_config)
