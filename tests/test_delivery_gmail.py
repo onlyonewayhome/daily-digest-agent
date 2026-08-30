@@ -50,7 +50,7 @@ def test_gmail_builds_multipart_message(monkeypatch):
     service = SimpleNamespace(users=lambda: SimpleNamespace(messages=lambda: Messages()))
     monkeypatch.setattr(gmail, "build", lambda *args, **kwargs: service)
 
-    provider().deliver(digest())
+    receipt = provider().deliver(digest())
 
     raw = base64.urlsafe_b64decode(bodies[0]["raw"])
     message = BytesParser(policy=policy.default).parsebytes(raw)
@@ -59,6 +59,8 @@ def test_gmail_builds_multipart_message(monkeypatch):
     assert message["Subject"] == "Example Daily"
     assert message.get_body(preferencelist=("plain",)).get_content().strip() == "Plain body"
     assert message.get_body(preferencelist=("html",)).get_content().strip() == "<p>HTML body</p>"
+    assert receipt.provider == "gmail"
+    assert receipt.provider_message_id == "message-id"
 
 
 def test_gmail_retries_transient_failure_once(monkeypatch):

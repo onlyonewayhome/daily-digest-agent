@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "daily-digest-agent"
-version = "0.1.0"
+version = "1.0.0"
 description = "A configurable, provider-agnostic framework for scheduled AI-written digests."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["build>=1.2", "mypy>=1.11", "pytest>=8.3", "ruff>=0.6", "types-PyYAML>=6.0"]
+dev = ["build>=1.2", "mypy>=1.11", "pip-audit>=2.10", "pytest>=8.3", "ruff>=0.6", "types-PyYAML>=6.0"]
 
 [project.scripts]
 daily-digest-agent = "daily_digest_agent.main:main"

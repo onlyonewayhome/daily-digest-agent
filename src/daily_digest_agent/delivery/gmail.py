@@ -6,7 +6,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from ..models import Digest
+from ..models import DeliveryReceipt, Digest
 
 
 class GmailDeliveryProvider:
@@ -23,7 +23,7 @@ class GmailDeliveryProvider:
             scopes=["https://www.googleapis.com/auth/gmail.send"],
         )
 
-    def deliver(self, digest: Digest) -> None:
+    def deliver(self, digest: Digest) -> DeliveryReceipt:
         if not self.credentials.valid:
             self.credentials.refresh(Request())
         message = EmailMessage()
@@ -41,8 +41,9 @@ class GmailDeliveryProvider:
         last_error: Exception | None = None
         for attempt in range(2):
             try:
-                send()
-                return
+                result = send()
+                message_id = result.get("id") if isinstance(result, dict) else None
+                return DeliveryReceipt(provider="gmail", provider_message_id=message_id)
             except Exception as exc:
                 last_error = exc
                 status = getattr(exc, "status_code", None) or getattr(exc, "code", None)

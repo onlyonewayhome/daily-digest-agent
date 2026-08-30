@@ -33,3 +33,7 @@ Reconciled reservation rows are authoritative for priced-call actual cost, and d
 authoritative for sent state. This avoids cross-table atomicity requirements on D1 REST.
 `digests.story_ids_json` is authoritative for digest membership. Story-level digest flags are
 transactional in SQLite and best-effort denormalized indexes in D1.
+Version 5 adds delivery provider and provider-message receipt fields. Recovery retries create a new
+attempt from the persisted digest instead of mutating the original attempt.
+Version 6 adds audited budget-reservation release fields. Released reservations stop consuming
+application budget but remain in storage with their release time and operator-supplied reason.

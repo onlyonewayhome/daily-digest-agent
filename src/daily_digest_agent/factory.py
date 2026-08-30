@@ -1,6 +1,7 @@
 import os
 
 from .config import AppConfig
+from .delivery.base import DeliveryProvider
 from .exceptions import ConfigurationError
 from .pipeline import DigestPipeline
 from .storage.base import StateStore
@@ -25,14 +26,11 @@ def create_store(config: AppConfig) -> StateStore:
     )
 
 
-def create_pipeline(config: AppConfig) -> DigestPipeline:
-    from .classification.gemini import GeminiClassifierProvider
+def create_delivery(config: AppConfig) -> DeliveryProvider:
     from .delivery.console import ConsoleDeliveryProvider
     from .delivery.gmail import GmailDeliveryProvider
-    from .discovery.gemini import GeminiDiscoveryProvider
-    from .writers.openai import OpenAIDigestWriter
 
-    delivery = (
+    return (
         ConsoleDeliveryProvider(config.delivery.save_html_path)
         if config.delivery.provider == "console"
         else GmailDeliveryProvider(
@@ -43,6 +41,14 @@ def create_pipeline(config: AppConfig) -> DigestPipeline:
             required_env("DIGEST_RECIPIENT"),
         )
     )
+
+
+def create_pipeline(config: AppConfig) -> DigestPipeline:
+    from .classification.gemini import GeminiClassifierProvider
+    from .discovery.gemini import GeminiDiscoveryProvider
+    from .writers.openai import OpenAIDigestWriter
+
+    delivery = create_delivery(config)
     return DigestPipeline(
         config,
         create_store(config),

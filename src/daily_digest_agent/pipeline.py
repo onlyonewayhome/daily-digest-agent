@@ -213,12 +213,12 @@ class DigestPipeline:
                 assert delivery_id is not None
                 self.store.update_delivery(delivery_id, "sending", digest_id=digest_id)
                 try:
-                    self.delivery.deliver(digest)
+                    receipt = self.delivery.deliver(digest)
                 except Exception as exc:
                     self.store.update_delivery(delivery_id, "unknown", digest_id=digest_id, error=str(exc))
                     raise
                 sent_at = datetime.now(UTC)
-                self.store.complete_delivery(delivery_id, digest_id, sent_at)
+                self.store.complete_delivery(delivery_id, digest_id, sent_at, receipt)
                 digest.sent_at = sent_at
             self.store.record_run_finish(run_id, "success")
             return RunResult(run_id=run_id, status="success", discovery=report,

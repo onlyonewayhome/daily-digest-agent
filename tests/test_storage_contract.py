@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from daily_digest_agent.models import Digest, SourceRecord, Story
+from daily_digest_agent.models import DeliveryReceipt, Digest, SourceRecord, Story
 from daily_digest_agent.storage.base import StateStore
 from daily_digest_agent.storage.d1 import D1StateStore
 from daily_digest_agent.storage.sqlite import SQLiteStateStore
@@ -151,6 +151,35 @@ def test_budget_reservation_contract(store):
     assert store.reserve_budget("run", local_date, "google", "gemini", 0.40, 1.00) is not None
 
 
+def test_budget_reservation_inspection_and_release_contract(store):
+    local_date = date(2026, 8, 30)
+    reservation_id = store.reserve_budget("run", local_date, "google", "gemini", 0.40, 1.00)
+    assert reservation_id is not None
+    rows = store.list_budget_reservations("2026-08", state="reserved")
+    assert [row["id"] for row in rows] == [reservation_id]
+
+    assert store.release_budget_reservation(reservation_id, "provider confirmed no charge")
+    assert not store.release_budget_reservation(reservation_id, "duplicate release")
+    released = store.list_budget_reservations("2026-08", state="released")[0]
+    assert released["release_reason"] == "provider confirmed no charge"
+    assert released["released_at"] is not None
+    assert store.get_usage(local_date).reserved_monthly_cost_usd == 0.0
+
+
+def test_stale_record_diagnostics_contract(store):
+    local_date = date(2026, 8, 30)
+    run_id = store.record_run_start(local_date, forced=False)
+    delivery_id = store.reserve_delivery(local_date, run_id)
+    assert delivery_id is not None
+    reservation_id = store.reserve_budget("run", local_date, "google", "gemini", 0.40, 1.00)
+    assert reservation_id is not None
+
+    stale = store.list_stale_records(datetime.now(UTC) + timedelta(seconds=1))
+    assert [row["id"] for row in stale["runs"]] == [run_id]
+    assert [row["id"] for row in stale["deliveries"]] == [delivery_id]
+    assert [row["id"] for row in stale["budget_reservations"]] == [reservation_id]
+
+
 def test_d1_budget_reservation_uses_single_conditional_insert():
     store = SQLiteBackedD1Store()
     store.initialize()
@@ -233,9 +262,17 @@ def test_digest_and_sent_state_contract(store):
     delivery_id = store.reserve_delivery(local_date, run_id)
     assert delivery_id is not None
     store.update_delivery(delivery_id, "sending", digest_id=digest_id)
-    store.complete_delivery(delivery_id, digest_id, now + timedelta(minutes=1))
+    store.complete_delivery(
+        delivery_id, digest_id, now + timedelta(minutes=1),
+        DeliveryReceipt(provider="test", provider_message_id="message-id"),
+    )
     assert store.digest_sent_for_date(local_date)
     assert not store.digest_sent_for_date(local_date + timedelta(days=1))
+    completed = store.get_delivery(delivery_id)
+    assert completed["provider"] == "test"
+    assert completed["provider_message_id"] == "message-id"
+    assert store.list_deliveries(1)[0]["id"] == delivery_id
+    assert store.get_digest(digest_id).included_story_ids == [story_id]
 
 
 def test_delivery_reservation_contract(store):
@@ -279,7 +316,10 @@ def test_d1_delivery_completion_is_one_authoritative_write():
         return original(sql, params)
 
     store._query = query
-    store.complete_delivery(delivery_id, "digest-id", datetime(2026, 8, 30, 12, tzinfo=UTC))
+    store.complete_delivery(
+        delivery_id, "digest-id", datetime(2026, 8, 30, 12, tzinfo=UTC),
+        DeliveryReceipt(provider="test", provider_message_id="message-id"),
+    )
     assert len(calls) == 1
     assert calls[0].lstrip().startswith("UPDATE deliveries SET state='sent'")
 

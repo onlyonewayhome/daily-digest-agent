@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from ..exceptions import DeliveryStateError, StorageSchemaError
-from ..models import Digest, SourceRecord, Story, UsageSummary
+from ..models import DeliveryReceipt, Digest, SourceRecord, Story, UsageSummary
 from .schema import (
     BASE_SCHEMA_STATEMENTS,
     BUDGET_RESERVATION_INDEX_STATEMENTS,
@@ -71,6 +71,22 @@ class SQLiteStateStore:
                 for statement in BUDGET_RESERVATION_INDEX_STATEMENTS:
                     db.execute(statement)
                 self._set_schema_version(db, 4)
+                version = 4
+            if version < 5:
+                columns = {row["name"] for row in db.execute("PRAGMA table_info(deliveries)").fetchall()}
+                if "provider" not in columns:
+                    db.execute("ALTER TABLE deliveries ADD COLUMN provider TEXT")
+                if "provider_message_id" not in columns:
+                    db.execute("ALTER TABLE deliveries ADD COLUMN provider_message_id TEXT")
+                self._set_schema_version(db, 5)
+                version = 5
+            if version < 6:
+                columns = {row["name"] for row in db.execute("PRAGMA table_info(budget_reservations)").fetchall()}
+                if "released_at" not in columns:
+                    db.execute("ALTER TABLE budget_reservations ADD COLUMN released_at TEXT")
+                if "release_reason" not in columns:
+                    db.execute("ALTER TABLE budget_reservations ADD COLUMN release_reason TEXT")
+                self._set_schema_version(db, 6)
 
     @staticmethod
     def _set_schema_version(db: sqlite3.Connection, version: int) -> None:
@@ -192,6 +208,55 @@ class SQLiteStateStore:
             )
         return reservation_id
 
+    def list_budget_reservations(self, local_month: str, state: str | None = None,
+                                 limit: int = 100) -> list[dict[str, object]]:
+        with self._connect() as db:
+            if state is None:
+                rows = db.execute(
+                    """SELECT * FROM budget_reservations WHERE local_month=?
+                    ORDER BY created_at DESC LIMIT ?""",
+                    (local_month, limit),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    """SELECT * FROM budget_reservations WHERE local_month=? AND state=?
+                    ORDER BY created_at DESC LIMIT ?""",
+                    (local_month, state, limit),
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def release_budget_reservation(self, reservation_id: str, reason: str) -> bool:
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as db:
+            cursor = db.execute(
+                """UPDATE budget_reservations SET state='released',released_at=?,release_reason=?,updated_at=?
+                WHERE id=? AND state='reserved'""",
+                (now, reason, now, reservation_id),
+            )
+            return cursor.rowcount == 1
+
+    def list_stale_records(self, before: datetime) -> dict[str, list[dict[str, object]]]:
+        cutoff = before.isoformat()
+        with self._connect() as db:
+            runs = db.execute(
+                "SELECT * FROM runs WHERE status='running' AND started_at<? ORDER BY started_at", (cutoff,)
+            ).fetchall()
+            deliveries = db.execute(
+                """SELECT * FROM deliveries WHERE state IN ('pending','sending') AND updated_at<?
+                ORDER BY updated_at""",
+                (cutoff,),
+            ).fetchall()
+            reservations = db.execute(
+                """SELECT * FROM budget_reservations WHERE state='reserved' AND updated_at<?
+                ORDER BY updated_at""",
+                (cutoff,),
+            ).fetchall()
+        return {
+            "runs": [dict(row) for row in runs],
+            "deliveries": [dict(row) for row in deliveries],
+            "budget_reservations": [dict(row) for row in reservations],
+        }
+
     def record_usage_and_reconcile(self, reservation_id: str, run_id: str, local_date: date,
                                    provider: str, model: str, input_tokens: int, output_tokens: int,
                                    estimated_cost_usd: float) -> None:
@@ -227,6 +292,18 @@ class SQLiteStateStore:
         with self._connect() as db:
             row = db.execute("SELECT story_ids_json FROM digests WHERE id=?", (digest_id,)).fetchone()
         return [str(value) for value in json.loads(row["story_ids_json"])] if row else []
+
+    def get_digest(self, digest_id: str) -> Digest | None:
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM digests WHERE id=?", (digest_id,)).fetchone()
+        if row is None:
+            return None
+        return Digest(
+            id=row["id"], digest_date=row["digest_date"], subject=row["subject"],
+            plain_text=row["plain_text"], html=row["html"],
+            included_story_ids=[str(value) for value in json.loads(row["story_ids_json"])],
+            generated_at=row["generated_at"], sent_at=row["sent_at"],
+        )
 
     def reserve_delivery(self, digest_date: date, run_id: str, force: bool = False) -> str | None:
         delivery_id = str(uuid.uuid4())
@@ -267,17 +344,26 @@ class SQLiteStateStore:
             row = db.execute("SELECT * FROM deliveries WHERE id=?", (delivery_id,)).fetchone()
             return dict(row) if row else None
 
+    def list_deliveries(self, limit: int = 20) -> list[dict[str, object]]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM deliveries ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def mark_digest_sent(self, digest_id: str, sent_at: datetime) -> None:
         with self._connect() as db:
             db.execute("UPDATE digests SET sent_at=? WHERE id=?", (sent_at.isoformat(), digest_id))
 
-    def complete_delivery(self, delivery_id: str, digest_id: str, sent_at: datetime) -> None:
+    def complete_delivery(self, delivery_id: str, digest_id: str, sent_at: datetime,
+                          receipt: DeliveryReceipt) -> None:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("UPDATE digests SET sent_at=? WHERE id=?", (sent_at.isoformat(), digest_id))
             db.execute(
-                """UPDATE deliveries SET state='sent',digest_id=?,updated_at=?,error=NULL WHERE id=?""",
-                (digest_id, sent_at.isoformat(), delivery_id),
+                """UPDATE deliveries SET state='sent',digest_id=?,updated_at=?,error=NULL,
+                provider=?,provider_message_id=? WHERE id=?""",
+                (digest_id, sent_at.isoformat(), receipt.provider, receipt.provider_message_id, delivery_id),
             )
 
     def digest_sent_for_date(self, digest_date: date) -> bool:

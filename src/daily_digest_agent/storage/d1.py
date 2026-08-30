@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 from ..exceptions import DeliveryStateError, StorageSchemaError
-from ..models import Digest, SourceRecord, Story, UsageSummary
+from ..models import DeliveryReceipt, Digest, SourceRecord, Story, UsageSummary
 from .schema import (
     BASE_SCHEMA_STATEMENTS,
     BUDGET_RESERVATION_INDEX_STATEMENTS,
@@ -83,6 +83,22 @@ class D1StateStore:
             for statement in BUDGET_RESERVATION_INDEX_STATEMENTS:
                 self._query(statement)
             self._set_schema_version(4)
+            version = 4
+        if version < 5:
+            columns = {row["name"] for row in self._query("PRAGMA table_info(deliveries)")}
+            if "provider" not in columns:
+                self._query("ALTER TABLE deliveries ADD COLUMN provider TEXT")
+            if "provider_message_id" not in columns:
+                self._query("ALTER TABLE deliveries ADD COLUMN provider_message_id TEXT")
+            self._set_schema_version(5)
+            version = 5
+        if version < 6:
+            columns = {row["name"] for row in self._query("PRAGMA table_info(budget_reservations)")}
+            if "released_at" not in columns:
+                self._query("ALTER TABLE budget_reservations ADD COLUMN released_at TEXT")
+            if "release_reason" not in columns:
+                self._query("ALTER TABLE budget_reservations ADD COLUMN release_reason TEXT")
+            self._set_schema_version(6)
 
     def _set_schema_version(self, version: int) -> None:
         self._query("DELETE FROM schema_meta")
@@ -198,6 +214,51 @@ class D1StateStore:
             "SELECT 1 FROM budget_reservations WHERE id=?", [reservation_id]
         ) else None
 
+    def list_budget_reservations(self, local_month: str, state: str | None = None,
+                                 limit: int = 100) -> list[dict[str, object]]:
+        if state is None:
+            return self._query(
+                """SELECT * FROM budget_reservations WHERE local_month=?
+                ORDER BY created_at DESC LIMIT ?""",
+                [local_month, limit],
+            )
+        return self._query(
+            """SELECT * FROM budget_reservations WHERE local_month=? AND state=?
+            ORDER BY created_at DESC LIMIT ?""",
+            [local_month, state, limit],
+        )
+
+    def release_budget_reservation(self, reservation_id: str, reason: str) -> bool:
+        now = datetime.now(UTC).isoformat()
+        self._query(
+            """UPDATE budget_reservations SET state='released',released_at=?,release_reason=?,updated_at=?
+            WHERE id=? AND state='reserved'""",
+            [now, reason, now, reservation_id],
+        )
+        return bool(self._query(
+            """SELECT 1 FROM budget_reservations
+            WHERE id=? AND state='released' AND released_at=? AND release_reason=?""",
+            [reservation_id, now, reason],
+        ))
+
+    def list_stale_records(self, before: datetime) -> dict[str, list[dict[str, object]]]:
+        cutoff = before.isoformat()
+        return {
+            "runs": self._query(
+                "SELECT * FROM runs WHERE status='running' AND started_at<? ORDER BY started_at", [cutoff]
+            ),
+            "deliveries": self._query(
+                """SELECT * FROM deliveries WHERE state IN ('pending','sending') AND updated_at<?
+                ORDER BY updated_at""",
+                [cutoff],
+            ),
+            "budget_reservations": self._query(
+                """SELECT * FROM budget_reservations WHERE state='reserved' AND updated_at<?
+                ORDER BY updated_at""",
+                [cutoff],
+            ),
+        }
+
     def record_usage_and_reconcile(self, reservation_id: str, run_id: str, local_date: date,
                                    provider: str, model: str, input_tokens: int, output_tokens: int,
                                    estimated_cost_usd: float) -> None:
@@ -239,6 +300,18 @@ class D1StateStore:
         rows = self._query("SELECT story_ids_json FROM digests WHERE id=?", [digest_id])
         return [str(value) for value in json.loads(rows[0]["story_ids_json"])] if rows else []
 
+    def get_digest(self, digest_id: str) -> Digest | None:
+        rows = self._query("SELECT * FROM digests WHERE id=?", [digest_id])
+        if not rows:
+            return None
+        row = rows[0]
+        return Digest(
+            id=row["id"], digest_date=row["digest_date"], subject=row["subject"],
+            plain_text=row["plain_text"], html=row["html"],
+            included_story_ids=[str(value) for value in json.loads(row["story_ids_json"])],
+            generated_at=row["generated_at"], sent_at=row["sent_at"],
+        )
+
     def reserve_delivery(self, digest_date: date, run_id: str, force: bool = False) -> str | None:
         delivery_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
@@ -274,13 +347,18 @@ class D1StateStore:
         rows = self._query("SELECT * FROM deliveries WHERE id=?", [delivery_id])
         return rows[0] if rows else None
 
+    def list_deliveries(self, limit: int = 20) -> list[dict[str, object]]:
+        return self._query("SELECT * FROM deliveries ORDER BY created_at DESC LIMIT ?", [limit])
+
     def mark_digest_sent(self, digest_id: str, sent_at: datetime) -> None:
         self._query("UPDATE digests SET sent_at=? WHERE id=?", [sent_at.isoformat(), digest_id])
 
-    def complete_delivery(self, delivery_id: str, digest_id: str, sent_at: datetime) -> None:
+    def complete_delivery(self, delivery_id: str, digest_id: str, sent_at: datetime,
+                          receipt: DeliveryReceipt) -> None:
         self._query(
-            """UPDATE deliveries SET state='sent',digest_id=?,updated_at=?,error=NULL WHERE id=?""",
-            [digest_id, sent_at.isoformat(), delivery_id],
+            """UPDATE deliveries SET state='sent',digest_id=?,updated_at=?,error=NULL,
+            provider=?,provider_message_id=? WHERE id=?""",
+            [digest_id, sent_at.isoformat(), receipt.provider, receipt.provider_message_id, delivery_id],
         )
 
     def digest_sent_for_date(self, digest_date: date) -> bool:

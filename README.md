@@ -1,5 +1,8 @@
 # daily-digest-agent
 
+**Version 1.0.0 — private-fork ready.** See `docs/private-fork-setup.md` for deployment and
+`docs/operations.md` for recovery and routine operations.
+
 A lightweight, topic-agnostic Python framework that discovers recent web developments, filters and
 deduplicates them, writes a source-grounded newsletter, persists state, and delivers on a schedule.
 It runs once and exits: no server, queue, browser automation, or always-on infrastructure.
@@ -65,11 +68,22 @@ daily-digest-agent run --config config/digest.yaml
 daily-digest-agent run --config config/digest.yaml --dry-run
 daily-digest-agent run --config config/digest.yaml --force
 daily-digest-agent show-budget --config config/digest.yaml
+daily-digest-agent show-budget-reservations --state reserved --config config/digest.yaml
+daily-digest-agent release-budget-reservation --id RESERVATION_ID --reason "reason" --unsafe-release --config config/digest.yaml
+daily-digest-agent show-stale --older-than-hours 6 --config config/digest.yaml
 daily-digest-agent show-last-run --config config/digest.yaml
+daily-digest-agent show-deliveries --config config/digest.yaml
+daily-digest-agent show-delivery --id DELIVERY_ID --config config/digest.yaml
+daily-digest-agent retry-delivery --id DELIVERY_ID --config config/digest.yaml
 ```
 
 `--force` bypasses only the successful-run count. It does not bypass provider or monthly caps.
 `--force-send` separately creates a new delivery attempt for the same configured local date.
+Delivery history includes provider receipts such as Gmail message IDs. `retry-delivery` accepts only
+`failed` or `unknown` attempts with an existing persisted digest, creates a new numbered attempt, and
+resends that digest without repeating paid discovery, classification, or writing.
+Budget reservation release is an audited emergency action. Use it only after provider evidence confirms
+that an ambiguous request was not billed. `show-stale` is diagnostic and never mutates records.
 `--unsafe-budget-override` is an explicit emergency escape hatch. `--offline` fails closed unless a
 fixture integration is supplied; automated tests use fake providers and never contact a network.
 
@@ -105,11 +119,14 @@ ruff check src tests
 mypy src
 pytest
 python -m build
+python -m pip_audit --skip-editable
 ```
 
 CI builds both a wheel and source distribution, verifies required runtime modules in each artifact,
 installs the wheel into a clean virtual environment, and runs CLI/import smoke tests outside the
 source tree. Deployment configuration remains external to the Python package.
+Reproducible deployment and development versions are listed in `constraints/runtime.txt` and
+`constraints/dev.txt`. CI audits the constrained environment for known Python package vulnerabilities.
 
 ## Cost safeguards
 
@@ -171,6 +188,15 @@ Set `storage.provider: d1` and configure the Cloudflare account, D1 database, an
 token as GitHub secrets. Set `delivery.provider: gmail` and configure OAuth client and refresh-token
 secrets. Copy `config/example.yaml` to `config/digest.yaml`; the scheduled workflow expects that
 path. The example cron is `15:17 UTC` and should be changed for the deployment.
+Use `config/private.example.yaml` as the production-oriented template. The scheduled workflow installs
+the runtime constraints, accepts private configuration through the `DIGEST_CONFIG_YAML` repository
+secret, and pins all third-party GitHub Actions to immutable commit SHAs.
+
+## Release process
+
+The source and module versions must match. A `v1.0.0` tag builds and tests wheel/sdist artifacts,
+generates SHA-256 checksums, uploads CI artifacts, and creates a GitHub release. The optional
+`D1 integration smoke` workflow validates initialization against a credentialed D1 database.
 
 ## Create a private topic deployment
 

@@ -1,0 +1,44 @@
+digest:
+  name: My Private Daily
+  description: A private daily briefing for the configured topic.
+  timezone: America/New_York
+  editorial_voice: Concise, factual, source-grounded, and useful. Prioritize impact over volume.
+  search_window_hours: 36
+  quiet_day_message: Quiet day today — no substantial new developments met the configured threshold.
+topic:
+  name: Replace With Private Topic
+  description: Replace with a precise definition of what is directly relevant.
+  include_terms: []
+  exclude_terms: []
+categories:
+  - {id: major_news, name: Major News, weight: 10}
+  - {id: business, name: Business, weight: 7}
+search_missions:
+  - id: general
+    prompt: Find substantive developments about {topic_name} published or materially updated within the search window.
+sources:
+  preferred_domains: []
+  ignored_domains: []
+  grounding_policy: require
+models:
+  discovery: {provider: google, model: gemini-2.5-flash, grounding: google_search}
+  classification: {provider: google, model: gemini-2.5-flash-lite}
+  writer: {provider: openai, model: REPLACE_WITH_ENABLED_MODEL}
+storage: {provider: d1}
+delivery: {provider: gmail, save_html_path: null}
+filters: {minimum_importance: 3, minimum_relevance: 0.60, maximum_stories_per_digest: 15}
+budget:
+  monthly_usd_cap: 3.00
+  monthly_safety_buffer_usd: 0.25
+  allow_unknown_pricing: false
+  max_runs_per_day: 1
+  gemini: {max_calls_per_run: 20, max_calls_per_day: 25, max_input_tokens_per_request: 20000, max_output_tokens_per_request: 5000}
+  openai: {max_calls_per_run: 2, max_calls_per_day: 3, max_input_tokens_per_request: 50000, max_output_tokens_per_request: 5000, max_output_tokens_per_digest: 5000}
+pricing:
+  # Replace every value with verified current pricing before enabling scheduled runs.
+  google:
+    gemini-2.5-flash: {input_per_million: 1.00, output_per_million: 1.00}
+    gemini-2.5-flash-lite: {input_per_million: 1.00, output_per_million: 1.00}
+  openai:
+    REPLACE_WITH_ENABLED_MODEL: {input_per_million: 1.00, output_per_million: 1.00}
+health: {minimum_search_success_ratio: 0.75}

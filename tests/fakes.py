@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from daily_digest_agent.models import (
     CandidateStory,
+    DeliveryReceipt,
     Digest,
     DigestContext,
     DiscoveryResult,
@@ -71,6 +72,7 @@ class FakeDelivery:
         if self.fail:
             raise RuntimeError("delivery failed")
         self.delivered.append(digest)
+        return DeliveryReceipt(provider="fake", provider_message_id=f"fake-{len(self.delivered)}")
 
 
 def candidate(url="https://example.com/story", title="Example story"):

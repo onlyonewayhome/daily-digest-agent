@@ -80,6 +80,11 @@ class Digest(BaseModel):
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
+class DeliveryReceipt(BaseModel):
+    provider: str
+    provider_message_id: str | None = None
+
+
 class DigestContext(BaseModel):
     digest_name: str
     digest_date: date
@@ -116,6 +121,19 @@ class UsageSummary(BaseModel):
     provider_calls_month: dict[str, int] = Field(default_factory=dict)
     estimated_monthly_cost_usd: float = 0.0
     reserved_monthly_cost_usd: float = 0.0
+
+
+class BudgetStatus(BaseModel):
+    local_date: date
+    local_month: str
+    monthly_usd_cap: float
+    monthly_safety_buffer_usd: float
+    monthly_safety_threshold_usd: float
+    estimated_monthly_cost_usd: float
+    reserved_monthly_cost_usd: float
+    remaining_application_capacity_usd: float
+    provider_calls_today: dict[str, int] = Field(default_factory=dict)
+    provider_calls_month: dict[str, int] = Field(default_factory=dict)
 
 
 class RunResult(BaseModel):

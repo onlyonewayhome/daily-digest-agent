@@ -103,6 +103,49 @@ def test_sqlite_migrates_version_three_to_budget_reservations(tmp_path):
         assert db.execute("SELECT COUNT(*) count FROM budget_reservations").fetchone()["count"] == 0
 
 
+def test_sqlite_migrates_version_four_to_delivery_receipts(tmp_path):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.initialize()
+    with store._connect() as db:
+        db.execute("UPDATE schema_meta SET version=4")
+        db.execute("ALTER TABLE deliveries RENAME TO deliveries_v5")
+        db.execute("""CREATE TABLE deliveries (
+            id TEXT PRIMARY KEY, digest_date TEXT NOT NULL, attempt INTEGER NOT NULL,
+            run_id TEXT NOT NULL, digest_id TEXT, state TEXT NOT NULL, created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL, error TEXT, UNIQUE(digest_date,attempt))""")
+        db.execute("""INSERT INTO deliveries(
+            id,digest_date,attempt,run_id,digest_id,state,created_at,updated_at,error
+        ) SELECT id,digest_date,attempt,run_id,digest_id,state,created_at,updated_at,error FROM deliveries_v5""")
+        db.execute("DROP TABLE deliveries_v5")
+    store.initialize()
+    with store._connect() as db:
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(deliveries)")}
+    assert {"provider", "provider_message_id"} <= columns
+
+
+def test_sqlite_migrates_version_five_to_reservation_release_audit(tmp_path):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.initialize()
+    with store._connect() as db:
+        db.execute("UPDATE schema_meta SET version=5")
+        db.execute("ALTER TABLE budget_reservations RENAME TO budget_reservations_v6")
+        db.execute("""CREATE TABLE budget_reservations (
+            id TEXT PRIMARY KEY, run_id TEXT NOT NULL, local_date TEXT NOT NULL,
+            local_month TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+            reserved_cost_usd REAL NOT NULL, actual_cost_usd REAL, state TEXT NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        db.execute("""INSERT INTO budget_reservations(
+            id,run_id,local_date,local_month,provider,model,reserved_cost_usd,actual_cost_usd,
+            state,created_at,updated_at
+        ) SELECT id,run_id,local_date,local_month,provider,model,reserved_cost_usd,actual_cost_usd,
+            state,created_at,updated_at FROM budget_reservations_v6""")
+        db.execute("DROP TABLE budget_reservations_v6")
+    store.initialize()
+    with store._connect() as db:
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(budget_reservations)")}
+    assert {"released_at", "release_reason"} <= columns
+
+
 def test_d1_usage_queries_and_insert_use_logical_dates():
     store = object.__new__(D1StateStore)
     calls = []
