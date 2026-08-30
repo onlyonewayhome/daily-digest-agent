@@ -6,10 +6,19 @@ from datetime import UTC, datetime
 
 from openai import OpenAI
 from openai.types.responses.response import Response
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ..config import AppConfig
 from ..exceptions import ProviderOutputError
 from ..models import Digest, DigestContext, Story, TokenUsage
+
+
+class DigestPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str
+    plain_text: str
+    html: str
 
 
 class OpenAIDigestWriter:
@@ -44,16 +53,19 @@ Return JSON with exactly: subject, plain_text, html."""
             )
 
         response = request()
-        payload = json.loads(response.output_text)
-        rendered_urls = set(re.findall(r"https?://[^\s<>'\"\])]+", payload["plain_text"] + " " + payload["html"]))
+        try:
+            payload = DigestPayload.model_validate_json(response.output_text)
+        except (ValidationError, ValueError) as exc:
+            raise ProviderOutputError(f"OpenAI writer returned invalid structured output: {exc}") from exc
+        rendered_urls = set(re.findall(r"https?://[^\s<>'\"\])]+", payload.plain_text + " " + payload.html))
         unexpected = rendered_urls - allowed_urls
         if unexpected:
             raise ProviderOutputError(f"Writer returned URLs outside the verified source set: {sorted(unexpected)}")
         return Digest(
             digest_date=context.digest_date,
-            subject=payload["subject"],
-            plain_text=payload["plain_text"],
-            html=payload["html"],
+            subject=payload.subject,
+            plain_text=payload.plain_text,
+            html=payload.html,
             generated_at=datetime.now(UTC),
             token_usage=TokenUsage(
                 input_tokens=getattr(response.usage, "input_tokens", 0) or 0,

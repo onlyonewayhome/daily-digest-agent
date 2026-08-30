@@ -4,6 +4,7 @@ import json
 
 from google import genai
 from google.genai import types
+from pydantic import ValidationError
 
 from ..config import AppConfig
 from ..exceptions import ProviderOutputError
@@ -43,13 +44,16 @@ Return only JSON matching the requested schema."""
             )
 
         response = request()
-        payload = json.loads(response.text or "{}")
-        metadata = getattr(response, "usage_metadata", None)
-        payload["token_usage"] = {
-            "input_tokens": getattr(metadata, "prompt_token_count", 0) or 0,
-            "output_tokens": getattr(metadata, "candidates_token_count", 0) or 0,
-        }
-        classification = StoryClassification.model_validate(payload)
+        try:
+            payload = json.loads(response.text or "{}")
+            metadata = getattr(response, "usage_metadata", None)
+            payload["token_usage"] = {
+                "input_tokens": getattr(metadata, "prompt_token_count", 0) or 0,
+                "output_tokens": getattr(metadata, "candidates_token_count", 0) or 0,
+            }
+            classification = StoryClassification.model_validate(payload)
+        except (json.JSONDecodeError, TypeError, ValidationError) as exc:
+            raise ProviderOutputError(f"Gemini classification returned invalid structured output: {exc}") from exc
         if classification.category is not None and classification.category not in category_ids:
             raise ProviderOutputError(
                 f"Classifier returned unknown category {classification.category!r}; expected one of {category_ids}"
