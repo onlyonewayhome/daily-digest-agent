@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11", "pytest>=8.3", "ruff>=0.6", "types-PyYAML>=6.0"]
+dev = ["build>=1.2", "mypy>=1.11", "pytest>=8.3", "ruff>=0.6", "types-PyYAML>=6.0"]
 
 [project.scripts]
 daily-digest-agent = "daily_digest_agent.main:main"

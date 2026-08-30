@@ -102,8 +102,14 @@ classification, writer, and delivery providers and run without paid calls:
 
 ```bash
 ruff check src tests
+mypy src
 pytest
+python -m build
 ```
+
+CI builds both a wheel and source distribution, verifies required runtime modules in each artifact,
+installs the wheel into a clean virtual environment, and runs CLI/import smoke tests outside the
+source tree. Deployment configuration remains external to the Python package.
 
 ## Cost safeguards
 

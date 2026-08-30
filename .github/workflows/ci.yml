@@ -130,7 +130,7 @@ jobs:
             tests/test_pipeline.py::test_new_story_on_second_run_is_still_classified
 
   package:
-    name: Package & compile
+    name: Package artifact
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -141,3 +141,38 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python -m compileall -q src
       - run: daily-digest-agent validate-config --config config/example.yaml
+      - run: python -m build
+      - name: Verify artifact manifests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import tarfile
+          import zipfile
+
+          wheel = next(Path("dist").glob("*.whl"))
+          sdist = next(Path("dist").glob("*.tar.gz"))
+          required = {
+              "daily_digest_agent/main.py",
+              "daily_digest_agent/writers/html.py",
+              "daily_digest_agent/writers/openai.py",
+          }
+          with zipfile.ZipFile(wheel) as archive:
+              wheel_files = set(archive.namelist())
+          missing_wheel = required - wheel_files
+          if missing_wheel:
+              raise SystemExit(f"Wheel is missing runtime files: {sorted(missing_wheel)}")
+          with tarfile.open(sdist, "r:gz") as archive:
+              sdist_files = {"/".join(Path(name).parts[1:]) for name in archive.getnames()}
+          missing_sdist = {f"src/{name}" for name in required} - sdist_files
+          if missing_sdist:
+              raise SystemExit(f"Sdist is missing runtime files: {sorted(missing_sdist)}")
+          PY
+      - name: Install and smoke-test wheel
+        run: |
+          python -m venv /tmp/daily-digest-wheel-test
+          /tmp/daily-digest-wheel-test/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/daily-digest-wheel-test/bin/python -c \
+            "import daily_digest_agent; from daily_digest_agent.writers.html import sanitize_email_html; print(daily_digest_agent.__version__)"
+          /tmp/daily-digest-wheel-test/bin/daily-digest-agent validate-config \
+            --config "$GITHUB_WORKSPACE/config/example.yaml"
