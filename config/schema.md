@@ -21,3 +21,5 @@ month used for daily and monthly accounting. Storage uses forward-only numbered 
 unversioned legacy databases bootstrap at version 1, then advance one version at a time. Version 2 adds
 the logical usage date and month fields. Startup refuses a database whose schema version is newer than
 the application supports instead of silently overwriting its metadata.
+Version 3 adds delivery attempts with a unique date/attempt reservation and explicit `pending`,
+`sending`, `sent`, `failed`, and `unknown` states. Previously sent digests are migrated as attempt 0.

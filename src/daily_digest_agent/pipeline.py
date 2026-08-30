@@ -92,9 +92,13 @@ class DigestPipeline:
         self.store.initialize()
         guard = BudgetGuard(self.config, self.store, local_date)
         guard.check_run(force=force)
-        if self.store.digest_sent_for_date(local_date) and not force_send:
-            raise DuplicateDigestError(f"A digest was already sent for {local_date}")
         run_id = self.store.record_run_start(local_date, force)
+        delivery_id: str | None = None
+        if not dry_run:
+            delivery_id = self.store.reserve_delivery(local_date, run_id, force=force_send)
+            if delivery_id is None:
+                self.store.record_run_finish(run_id, "failed", f"Delivery already reserved for {local_date}")
+                raise DuplicateDigestError(f"A delivery was already reserved for {local_date}")
         report = DiscoveryReport(searches_planned=len(self.config.search_missions),
                                  searches_successful=0, searches_failed=0, candidates_found=0)
         try:
@@ -200,9 +204,16 @@ class DigestPipeline:
             digest_id = self.store.record_digest(digest, run_id)
             digest.id = digest_id
             if not dry_run:
-                self.delivery.deliver(digest)
+                assert delivery_id is not None
+                self.store.update_delivery(delivery_id, "sending", digest_id=digest_id)
+                try:
+                    self.delivery.deliver(digest)
+                except Exception as exc:
+                    self.store.update_delivery(delivery_id, "unknown", digest_id=digest_id, error=str(exc))
+                    raise
                 sent_at = datetime.now(UTC)
                 self.store.mark_digest_sent(digest_id, sent_at)
+                self.store.update_delivery(delivery_id, "sent", digest_id=digest_id)
                 digest.sent_at = sent_at
             self.store.record_run_finish(run_id, "success")
             return RunResult(run_id=run_id, status="success", discovery=report,

@@ -6,9 +6,16 @@ import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from ..exceptions import StorageSchemaError
+from ..exceptions import DeliveryStateError, StorageSchemaError
 from ..models import Digest, SourceRecord, Story, UsageSummary
-from .schema import BASE_SCHEMA_STATEMENTS, SCHEMA_META_SQL, SCHEMA_VERSION, USAGE_DATE_INDEX_STATEMENTS
+from .schema import (
+    BASE_SCHEMA_STATEMENTS,
+    DELIVERIES_TABLE_SQL,
+    DELIVERY_INDEX_STATEMENTS,
+    SCHEMA_META_SQL,
+    SCHEMA_VERSION,
+    USAGE_DATE_INDEX_STATEMENTS,
+)
 
 
 class SQLiteStateStore:
@@ -46,6 +53,16 @@ class SQLiteStateStore:
                 for statement in USAGE_DATE_INDEX_STATEMENTS:
                     db.execute(statement)
                 self._set_schema_version(db, 2)
+                version = 2
+            if version < 3:
+                db.execute(DELIVERIES_TABLE_SQL)
+                for statement in DELIVERY_INDEX_STATEMENTS:
+                    db.execute(statement)
+                db.execute("""INSERT INTO deliveries(
+                    id,digest_date,attempt,run_id,digest_id,state,created_at,updated_at,error
+                ) SELECT id,digest_date,0,run_id,id,'sent',generated_at,COALESCE(sent_at,generated_at),NULL
+                  FROM digests WHERE sent_at IS NOT NULL""")
+                self._set_schema_version(db, 3)
 
     @staticmethod
     def _set_schema_version(db: sqlite3.Connection, version: int) -> None:
@@ -148,6 +165,45 @@ class SQLiteStateStore:
                 db.executemany("UPDATE stories SET included_in_digest=1,digest_id=? WHERE id=?",
                                [(digest_id, story_id) for story_id in digest.included_story_ids])
         return digest_id
+
+    def reserve_delivery(self, digest_date: date, run_id: str, force: bool = False) -> str | None:
+        delivery_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT attempt,state FROM deliveries WHERE digest_date=? ORDER BY attempt DESC LIMIT 1",
+                (digest_date.isoformat(),),
+            ).fetchone()
+            if row is not None and not force:
+                return None
+            attempt = int(row["attempt"]) + 1 if row is not None else 1
+            try:
+                db.execute(
+                    """INSERT INTO deliveries(
+                    id,digest_date,attempt,run_id,state,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,?)""",
+                    (delivery_id, digest_date.isoformat(), attempt, run_id, "pending", now, now),
+                )
+            except sqlite3.IntegrityError:
+                return None
+        return delivery_id
+
+    def update_delivery(self, delivery_id: str, state: str, digest_id: str | None = None,
+                        error: str | None = None) -> None:
+        if state not in {"pending", "sending", "sent", "failed", "unknown"}:
+            raise DeliveryStateError(f"Unknown delivery state: {state}")
+        with self._connect() as db:
+            db.execute(
+                """UPDATE deliveries SET state=?,digest_id=COALESCE(?,digest_id),updated_at=?,error=?
+                WHERE id=?""",
+                (state, digest_id, datetime.now(UTC).isoformat(), error, delivery_id),
+            )
+
+    def get_delivery(self, delivery_id: str) -> dict[str, object] | None:
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM deliveries WHERE id=?", (delivery_id,)).fetchone()
+            return dict(row) if row else None
 
     def mark_digest_sent(self, digest_id: str, sent_at: datetime) -> None:
         with self._connect() as db:

@@ -1,4 +1,4 @@
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_META_SQL = """CREATE TABLE IF NOT EXISTS schema_meta (
   version INTEGER NOT NULL
@@ -71,4 +71,22 @@ BASE_SCHEMA_STATEMENTS = (
 USAGE_DATE_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_usage_local_date ON usage(local_date)",
     "CREATE INDEX IF NOT EXISTS idx_usage_local_month ON usage(local_month)",
+)
+
+DELIVERIES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS deliveries (
+  id TEXT PRIMARY KEY,
+  digest_date TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  run_id TEXT NOT NULL,
+  digest_id TEXT,
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  error TEXT,
+  UNIQUE(digest_date, attempt)
+)"""
+
+DELIVERY_INDEX_STATEMENTS = (
+    "CREATE INDEX IF NOT EXISTS idx_deliveries_date ON deliveries(digest_date)",
+    "CREATE INDEX IF NOT EXISTS idx_deliveries_state ON deliveries(state)",
 )

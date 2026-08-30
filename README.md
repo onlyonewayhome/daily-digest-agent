@@ -69,7 +69,7 @@ daily-digest-agent show-last-run --config config/digest.yaml
 ```
 
 `--force` bypasses only the successful-run count. It does not bypass provider or monthly caps.
-`--force-send` separately permits sending another digest for the same configured local date.
+`--force-send` separately creates a new delivery attempt for the same configured local date.
 `--unsafe-budget-override` is an explicit emergency escape hatch. `--offline` fails closed unless a
 fixture integration is supplied; automated tests use fake providers and never contact a network.
 
@@ -131,8 +131,10 @@ before the cap. Provider-side billing remains authoritative.
 Discovery missions fail independently, but the normal newsletter is withheld when the configured
 success ratio is not met. A healthy zero-result run produces and persists a short deterministic
 quiet-day digest without invoking OpenAI. Accepted
-stories are persisted even when omitted due to the digest story limit. Sent digests are protected by
-local-date idempotency.
+stories are persisted even when omitted due to the digest story limit. Non-dry-run delivery is reserved
+before paid work begins. A unique date/attempt record prevents concurrent duplicate sends; delivery
+exceptions after sending starts are recorded as `unknown` and block automatic retry. `--force-send`
+creates an explicit new attempt when an operator has reviewed that state.
 
 Public web content is hostile input. Prompts label source material as data, ignore embedded
 instructions, prohibit secret disclosure/provider changes/external actions, and require supplied

@@ -3,7 +3,12 @@ from pathlib import Path
 import pytest
 
 from daily_digest_agent.config import AppConfig
-from daily_digest_agent.exceptions import DiscoveryHealthError, ProviderBudgetExceeded, ProviderOutputError
+from daily_digest_agent.exceptions import (
+    DiscoveryHealthError,
+    DuplicateDigestError,
+    ProviderBudgetExceeded,
+    ProviderOutputError,
+)
 from daily_digest_agent.models import DiscoveryResult, SourceRecord, StoryClassification, TokenUsage
 from daily_digest_agent.pipeline import DigestPipeline
 from daily_digest_agent.storage.sqlite import SQLiteStateStore
@@ -57,6 +62,34 @@ def test_delivery_failure_is_recorded(tmp_path, valid_config):
     with pytest.raises(RuntimeError):
         value.run()
     assert store.get_last_run()["status"] == "failed"
+    with store._connect() as db:
+        delivery = db.execute("SELECT state,error FROM deliveries").fetchone()
+    assert delivery["state"] == "unknown"
+    assert delivery["error"] == "delivery failed"
+
+
+def test_delivery_reservation_blocks_second_non_dry_run(tmp_path, valid_config):
+    first, store = pipeline(tmp_path, valid_config)
+    first.run()
+    second, _ = pipeline(tmp_path, valid_config)
+
+    with pytest.raises(DuplicateDigestError, match="already reserved"):
+        second.run(force=True)
+
+    with store._connect() as db:
+        assert db.execute("SELECT COUNT(*) count FROM deliveries").fetchone()["count"] == 1
+
+
+def test_force_send_creates_a_new_delivery_attempt(tmp_path, valid_config):
+    first, store = pipeline(tmp_path, valid_config)
+    first.run()
+    second, _ = pipeline(tmp_path, valid_config)
+
+    second.run(force=True, force_send=True)
+
+    with store._connect() as db:
+        rows = db.execute("SELECT attempt,state FROM deliveries ORDER BY attempt").fetchall()
+    assert [(row["attempt"], row["state"]) for row in rows] == [(1, "sent"), (2, "sent")]
 
 
 def test_budget_exceeded(tmp_path, valid_config):

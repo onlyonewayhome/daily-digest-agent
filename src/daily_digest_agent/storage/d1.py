@@ -7,9 +7,16 @@ from typing import Any
 
 import httpx
 
-from ..exceptions import StorageSchemaError
+from ..exceptions import DeliveryStateError, StorageSchemaError
 from ..models import Digest, SourceRecord, Story, UsageSummary
-from .schema import BASE_SCHEMA_STATEMENTS, SCHEMA_META_SQL, SCHEMA_VERSION, USAGE_DATE_INDEX_STATEMENTS
+from .schema import (
+    BASE_SCHEMA_STATEMENTS,
+    DELIVERIES_TABLE_SQL,
+    DELIVERY_INDEX_STATEMENTS,
+    SCHEMA_META_SQL,
+    SCHEMA_VERSION,
+    USAGE_DATE_INDEX_STATEMENTS,
+)
 
 
 class D1StateStore:
@@ -55,6 +62,16 @@ class D1StateStore:
             for statement in USAGE_DATE_INDEX_STATEMENTS:
                 self._query(statement)
             self._set_schema_version(2)
+            version = 2
+        if version < 3:
+            self._query(DELIVERIES_TABLE_SQL)
+            for statement in DELIVERY_INDEX_STATEMENTS:
+                self._query(statement)
+            self._query("""INSERT INTO deliveries(
+                id,digest_date,attempt,run_id,digest_id,state,created_at,updated_at,error
+            ) SELECT id,digest_date,0,run_id,id,'sent',generated_at,COALESCE(sent_at,generated_at),NULL
+              FROM digests WHERE sent_at IS NOT NULL""")
+            self._set_schema_version(3)
 
     def _set_schema_version(self, version: int) -> None:
         self._query("DELETE FROM schema_meta")
@@ -162,6 +179,43 @@ class D1StateStore:
                 [digest_id, story_id],
             )
         return digest_id
+
+    def reserve_delivery(self, digest_date: date, run_id: str, force: bool = False) -> str | None:
+        rows = self._query(
+            "SELECT attempt,state FROM deliveries WHERE digest_date=? ORDER BY attempt DESC LIMIT 1",
+            [digest_date.isoformat()],
+        )
+        if rows and not force:
+            return None
+        attempt = int(rows[0]["attempt"]) + 1 if rows else 1
+        delivery_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
+        try:
+            self._query(
+                """INSERT INTO deliveries(
+                id,digest_date,attempt,run_id,state,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?)""",
+                [delivery_id, digest_date.isoformat(), attempt, run_id, "pending", now, now],
+            )
+        except Exception as exc:
+            if "UNIQUE" in str(exc).upper() or "CONSTRAINT" in str(exc).upper():
+                return None
+            raise
+        return delivery_id
+
+    def update_delivery(self, delivery_id: str, state: str, digest_id: str | None = None,
+                        error: str | None = None) -> None:
+        if state not in {"pending", "sending", "sent", "failed", "unknown"}:
+            raise DeliveryStateError(f"Unknown delivery state: {state}")
+        self._query(
+            """UPDATE deliveries SET state=?,digest_id=COALESCE(?,digest_id),updated_at=?,error=?
+            WHERE id=?""",
+            [state, digest_id, datetime.now(UTC).isoformat(), error, delivery_id],
+        )
+
+    def get_delivery(self, delivery_id: str) -> dict[str, object] | None:
+        rows = self._query("SELECT * FROM deliveries WHERE id=?", [delivery_id])
+        return rows[0] if rows else None
 
     def mark_digest_sent(self, digest_id: str, sent_at: datetime) -> None:
         self._query("UPDATE digests SET sent_at=? WHERE id=?", [sent_at.isoformat(), digest_id])

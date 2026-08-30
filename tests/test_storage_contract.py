@@ -144,3 +144,29 @@ def test_digest_and_sent_state_contract(store):
     store.mark_digest_sent(digest_id, now + timedelta(minutes=1))
     assert store.digest_sent_for_date(local_date)
     assert not store.digest_sent_for_date(local_date + timedelta(days=1))
+
+
+def test_delivery_reservation_contract(store):
+    local_date = date(2026, 8, 30)
+    run_id = store.record_run_start(local_date, forced=False)
+
+    delivery_id = store.reserve_delivery(local_date, run_id)
+    assert delivery_id is not None
+    assert store.reserve_delivery(local_date, run_id) is None
+    delivery = store.get_delivery(delivery_id)
+    assert delivery is not None
+    assert delivery["state"] == "pending"
+    assert delivery["attempt"] == 1
+
+    store.update_delivery(delivery_id, "sending", digest_id="digest-id")
+    assert store.get_delivery(delivery_id)["state"] == "sending"
+    store.update_delivery(delivery_id, "unknown", error="ambiguous failure")
+    assert store.get_delivery(delivery_id)["state"] == "unknown"
+
+    forced_id = store.reserve_delivery(local_date, run_id, force=True)
+    assert forced_id is not None
+    forced = store.get_delivery(forced_id)
+    assert forced is not None
+    assert forced["attempt"] == 2
+    store.update_delivery(forced_id, "sent", digest_id="digest-id-2")
+    assert store.get_delivery(forced_id)["state"] == "sent"

@@ -73,6 +73,25 @@ def test_d1_rejects_future_schema_version():
         store.initialize()
 
 
+def test_sqlite_migrates_sent_digests_to_delivery_history(tmp_path):
+    store = SQLiteStateStore(str(tmp_path / "state.db"))
+    store.initialize()
+    with store._connect() as db:
+        db.execute("DELETE FROM deliveries")
+        db.execute("UPDATE schema_meta SET version=2")
+        db.execute(
+            """INSERT INTO digests(
+            id,run_id,digest_date,subject,plain_text,html,story_ids_json,generated_at,sent_at
+            ) VALUES(?,?,?,?,?,?,?,?,?)""",
+            ("digest", "run", "2026-08-30", "Subject", "Body", "<p>Body</p>", "[]",
+             "2026-08-30T12:00:00+00:00", "2026-08-30T12:01:00+00:00"),
+        )
+    store.initialize()
+    with store._connect() as db:
+        row = db.execute("SELECT digest_date,attempt,state,digest_id FROM deliveries").fetchone()
+    assert tuple(row) == ("2026-08-30", 0, "sent", "digest")
+
+
 def test_d1_usage_queries_and_insert_use_logical_dates():
     store = object.__new__(D1StateStore)
     calls = []

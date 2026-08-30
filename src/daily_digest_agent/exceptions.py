@@ -34,6 +34,10 @@ class DuplicateDigestError(DailyDigestError):
     pass
 
 
+class DeliveryStateError(DailyDigestError):
+    pass
+
+
 class DiscoveryHealthError(DailyDigestError):
     pass
 
